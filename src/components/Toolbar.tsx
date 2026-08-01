@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { canvasController } from '../canvasController';
 import { activeDesk, useStore } from '../store';
+import { snugget } from '../bridge';
 import type { AppNotification } from '../types';
 
 function timeAgo(t: number) {
@@ -11,8 +12,184 @@ function timeAgo(t: number) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+const QUICK_KEYS: { label: string; data: string }[] = [
+  { label: 'Enter ⏎', data: '\r' },
+  { label: 'Esc', data: '\x1b' },
+  { label: 'y', data: 'y\r' },
+  { label: 'n', data: 'n\r' }
+];
+
+function NotificationRow({
+  n,
+  expanded,
+  onToggleExpand,
+  onJump,
+  onInteract
+}: {
+  n: AppNotification;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onJump: () => void;
+  // Any interaction (jump, quick-key) resolves the notification, so it
+  // shouldn't keep sitting in the list once the user has acted on it.
+  onInteract: () => void;
+}) {
+  const isLong = n.body.length > 90 || n.body.includes('\n');
+  const compactBody = n.body.replace(/\s*\n\s*/g, ' ').trim();
+
+  const sendKey = (data: string) => {
+    if (n.terminalId) snugget.sendTerminalInput(n.terminalId, data);
+    onInteract();
+  };
+
+  const jump = () => {
+    onJump();
+    onInteract();
+  };
+
+  return (
+    <div className="notif-row">
+      <button className="notif-row-main" onClick={jump}>
+        {n.favicon ? (
+          <img className="favicon" src={n.favicon} alt="" draggable={false} />
+        ) : (
+          <span className="favicon-dot" />
+        )}
+        <span className="notif-text">
+          <span className="notif-app">
+            {n.appTitle} · {timeAgo(n.time)}
+          </span>
+          <span className="notif-title">{n.title}</span>
+          {n.body && (
+            <span className={expanded ? 'notif-body notif-body-expanded' : 'notif-body'}>
+              {expanded ? n.body : compactBody}
+            </span>
+          )}
+        </span>
+      </button>
+      <div className="notif-actions">
+        {isLong && (
+          <button className="notif-action" onClick={onToggleExpand}>
+            {expanded ? 'Collapse' : 'Expand'}
+          </button>
+        )}
+        <button className="notif-action" onClick={jump}>
+          Go to terminal
+        </button>
+        {n.kind === 'approval' && n.terminalId && (
+          <div className="notif-quickkeys">
+            {QUICK_KEYS.map((k) => (
+              <button key={k.label} className="notif-action" onClick={() => sendKey(k.data)}>
+                {k.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const TOAST_MS = 6000;
+
+function NotificationToasts() {
+  const notifications = useStore((s) => s.notifications);
+  const [toastIds, setToastIds] = useState<string[]>([]);
+  const seenRef = useRef<Set<string>>(new Set());
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(() => {
+    const seen = seenRef.current;
+    const fresh = notifications.filter((n) => !seen.has(n.id));
+    if (fresh.length === 0) return;
+    fresh.forEach((n) => seen.add(n.id));
+    setToastIds((ids) => [...fresh.map((n) => n.id), ...ids]);
+    fresh.forEach((n) => {
+      const timer = setTimeout(() => {
+        setToastIds((ids) => ids.filter((id) => id !== n.id));
+        timersRef.current.delete(n.id);
+      }, TOAST_MS);
+      timersRef.current.set(n.id, timer);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifications]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => timers.forEach((t) => clearTimeout(t));
+  }, []);
+
+  const dismiss = (id: string) => {
+    const timer = timersRef.current.get(id);
+    if (timer) clearTimeout(timer);
+    timersRef.current.delete(id);
+    setToastIds((ids) => ids.filter((tid) => tid !== id));
+  };
+
+  const jump = (n: AppNotification) => {
+    const s = useStore.getState();
+    const desk = s.desks.find((d) => d.id === n.deskId);
+    if (desk && desk.windows.some((w) => w.id === n.windowId)) {
+      s.setActiveDesk(n.deskId);
+      canvasController.current?.jumpToWindow(n.windowId);
+    }
+    s.removeNotification(n.id);
+    dismiss(n.id);
+  };
+
+  const sendKey = (n: AppNotification, data: string) => {
+    if (n.terminalId) snugget.sendTerminalInput(n.terminalId, data);
+    useStore.getState().removeNotification(n.id);
+    dismiss(n.id);
+  };
+
+  const visible = toastIds
+    .map((id) => notifications.find((n) => n.id === id))
+    .filter((n): n is AppNotification => Boolean(n));
+
+  if (visible.length === 0) return null;
+
+  return (
+    <div className="toast-stack">
+      {visible.map((n) => (
+        <div key={n.id} className="toast-card">
+          <button className="toast-close" onClick={() => dismiss(n.id)} title="Dismiss">
+            ×
+          </button>
+          <button className="toast-main" onClick={() => jump(n)}>
+            {n.favicon ? (
+              <img className="favicon" src={n.favicon} alt="" draggable={false} />
+            ) : (
+              <span className="favicon-dot" />
+            )}
+            <span className="notif-text">
+              <span className="notif-app">{n.appTitle}</span>
+              <span className="notif-title">{n.title}</span>
+              <span className="notif-body">{n.body.replace(/\s*\n\s*/g, ' ').trim()}</span>
+            </span>
+          </button>
+          {n.kind === 'approval' && n.terminalId && (
+            <div className="notif-quickkeys">
+              {QUICK_KEYS.map((k) => (
+                <button
+                  key={k.label}
+                  className="notif-action"
+                  onClick={() => sendKey(n, k.data)}
+                >
+                  {k.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function NotificationsBell() {
   const [open, setOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const notifications = useStore((s) => s.notifications);
   const unread = useStore((s) => s.unreadCount);
 
@@ -57,20 +234,14 @@ function NotificationsBell() {
               <div className="notif-empty">No notifications</div>
             ) : (
               notifications.map((n) => (
-                <button key={n.id} className="notif-row" onClick={() => jump(n)}>
-                  {n.favicon ? (
-                    <img className="favicon" src={n.favicon} alt="" draggable={false} />
-                  ) : (
-                    <span className="favicon-dot" />
-                  )}
-                  <span className="notif-text">
-                    <span className="notif-app">
-                      {n.appTitle} · {timeAgo(n.time)}
-                    </span>
-                    <span className="notif-title">{n.title}</span>
-                    {n.body && <span className="notif-body">{n.body}</span>}
-                  </span>
-                </button>
+                <NotificationRow
+                  key={n.id}
+                  n={n}
+                  expanded={expandedId === n.id}
+                  onToggleExpand={() => setExpandedId(expandedId === n.id ? null : n.id)}
+                  onJump={() => jump(n)}
+                  onInteract={() => useStore.getState().removeNotification(n.id)}
+                />
               ))
             )}
           </div>
@@ -121,6 +292,7 @@ export function Toolbar() {
 
   return (
     <>
+      <NotificationToasts />
       <div className="toolbar">
         <button
           className={!handActive ? 'active' : ''}

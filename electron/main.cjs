@@ -1,17 +1,12 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
-const { spawn } = require('child_process');
+const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
+require('dotenv').config();
+const googleAuth = require('./google-auth.cjs');
 
 let mainWindow = null;
 const terminalSessions = new Map();
-
-function terminalShellCommand() {
-  return {
-    command: process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh'),
-    args: ['-i']
-  };
-}
 
 function sendTerminalData(id, chunk) {
   if (mainWindow && chunk) {
@@ -19,34 +14,45 @@ function sendTerminalData(id, chunk) {
   }
 }
 
-function createTerminalSession() {
+function createTerminalSession(cols, rows) {
   const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  const { command, args } = terminalShellCommand();
-  const proc = spawn(command, args, {
+  const shellPath = process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh');
+  const ptyProcess = pty.spawn(shellPath, ['-i'], {
+    name: 'xterm-256color',
+    cols: cols || 80,
+    rows: rows || 24,
     cwd: app.getPath('home'),
-    stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env
   });
 
-  terminalSessions.set(id, proc);
-  proc.stdout.on('data', (chunk) => sendTerminalData(id, chunk.toString('utf8')));
-  proc.stderr.on('data', (chunk) => sendTerminalData(id, chunk.toString('utf8')));
-  proc.on('exit', (code) => {
+  terminalSessions.set(id, ptyProcess);
+  ptyProcess.onData((chunk) => sendTerminalData(id, chunk));
+  ptyProcess.onExit(({ exitCode }) => {
     terminalSessions.delete(id);
-    sendTerminalData(id, `\n[process exited${code === null ? '' : `: ${code}`}]\n`);
+    sendTerminalData(id, `\r\n[process exited: ${exitCode}]\r\n`);
   });
 
   return { id, output: '' };
 }
 
 function destroyTerminalSession(id) {
-  const proc = terminalSessions.get(id);
-  if (!proc) return;
+  const ptyProcess = terminalSessions.get(id);
+  if (!ptyProcess) return;
   terminalSessions.delete(id);
   try {
-    proc.kill();
+    ptyProcess.kill();
   } catch {
     /* ignore */
+  }
+}
+
+function resizeTerminalSession(id, cols, rows) {
+  const ptyProcess = terminalSessions.get(id);
+  if (!ptyProcess || !cols || !rows) return;
+  try {
+    ptyProcess.resize(cols, rows);
+  } catch {
+    /* ignore, e.g. process already exited */
   }
 }
 
@@ -124,12 +130,28 @@ ipcMain.handle('open-external', (_event, url) => {
   return shell.openExternal(url);
 });
 
-ipcMain.handle('terminal:create', () => createTerminalSession());
+ipcMain.handle('google:signin', async () => {
+  try {
+    return await googleAuth.signIn();
+  } catch (err) {
+    return { connected: false, error: err.message };
+  }
+});
+
+ipcMain.handle('google:status', () => googleAuth.getStatus());
+
+ipcMain.handle('google:signout', () => googleAuth.signOut());
+
+ipcMain.handle('terminal:create', (_event, payload) => createTerminalSession(payload?.cols, payload?.rows));
 
 ipcMain.on('terminal:input', (_event, payload) => {
-  const proc = terminalSessions.get(payload.id);
-  if (!proc || !proc.stdin.writable) return;
-  proc.stdin.write(String(payload.input ?? ''));
+  const ptyProcess = terminalSessions.get(payload.id);
+  if (!ptyProcess) return;
+  ptyProcess.write(String(payload.input ?? ''));
+});
+
+ipcMain.on('terminal:resize', (_event, payload) => {
+  resizeTerminalSession(payload.id, payload.cols, payload.rows);
 });
 
 ipcMain.handle('terminal:destroy', (_event, id) => {

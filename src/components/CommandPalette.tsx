@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   normalizeUrl,
   openApp,
   openBlankPage,
   openNativeTerminal,
+  openTextBox,
   PRESETS,
   presetIcon
 } from '../apps';
@@ -20,13 +22,19 @@ const domainOf = (url: string) => {
 function AppTile({
   name,
   url,
-  onOpen
+  onOpen,
+  icon,
+  favoritable = true
 }: {
   name: string;
   url: string;
   onOpen: (url: string) => void;
+  // Non-website tiles (Terminal, Blank page) have no real favicon — pass an
+  // inline SVG sized/positioned to match presetIcon's <img> instead.
+  icon?: ReactNode;
+  favoritable?: boolean;
 }) {
-  const isFav = useStore((s) => s.favorites.some((f) => f.url === url));
+  const isFav = useStore((s) => favoritable && s.favorites.some((f) => f.url === url));
   const toggleFav = (e: React.MouseEvent) => {
     e.stopPropagation();
     const s = useStore.getState();
@@ -36,18 +44,74 @@ function AppTile({
 
   return (
     <button className="palette-app" onClick={() => onOpen(url)}>
-      <span
-        className={`fav-star${isFav ? ' faved' : ''}`}
-        title={isFav ? 'Remove from favourites' : 'Add to favourites'}
-        onClick={toggleFav}
-      >
-        {isFav ? '★' : '☆'}
-      </span>
-      <img src={presetIcon(domainOf(url))} alt="" draggable={false} />
+      {favoritable && (
+        <span
+          className={`fav-star${isFav ? ' faved' : ''}`}
+          title={isFav ? 'Remove from favourites' : 'Add to favourites'}
+          onClick={toggleFav}
+        >
+          {isFav ? '★' : '☆'}
+        </span>
+      )}
+      {icon ?? <img src={presetIcon(domainOf(url))} alt="" draggable={false} />}
       <span>{name}</span>
     </button>
   );
 }
+
+const NEW_WINDOW_ICON = (
+  <svg
+    className="palette-app-icon"
+    width="28"
+    height="28"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <rect x="4" y="5" width="16" height="14" rx="2.5" />
+    <path d="M8 5v14" />
+    <path d="M4 9h16" />
+  </svg>
+);
+
+const TERMINAL_ICON = (
+  <svg
+    className="palette-app-icon"
+    width="28"
+    height="28"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
+    <path d="m7 10 3 2-3 2" />
+    <path d="M11 14h4" />
+  </svg>
+);
+
+const TEXT_ICON = (
+  <svg
+    className="palette-app-icon"
+    width="28"
+    height="28"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M5 6h14" />
+    <path d="M5 12h14" />
+    <path d="M5 18h8" />
+  </svg>
+);
 
 export function CommandPalette() {
   const [query, setQuery] = useState('');
@@ -66,6 +130,14 @@ export function CommandPalette() {
   const matchedPresets = q
     ? PRESETS.filter((p) => p.name.toLowerCase().includes(q))
     : PRESETS;
+  const NEW_ITEMS = [
+    { name: 'New window', icon: NEW_WINDOW_ICON, action: openBlankPage },
+    { name: 'Terminal', icon: TERMINAL_ICON, action: openNativeTerminal },
+    { name: 'Text box', icon: TEXT_ICON, action: openTextBox }
+  ];
+  const matchedNewItems = q
+    ? NEW_ITEMS.filter((n) => n.name.toLowerCase().includes(q))
+    : NEW_ITEMS;
 
   const submit = () => {
     if (!q) return;
@@ -91,38 +163,26 @@ export function CommandPalette() {
             if (e.key === 'Enter') submit();
           }}
         />
-        <div className="palette-open-bar">
-          <button
-            className="palette-icon-btn"
-            title="New window"
-            aria-label="New window"
-            onClick={() => {
-              openBlankPage();
-              close();
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="4" y="5" width="16" height="14" rx="2.5" />
-              <path d="M8 5v14" />
-              <path d="M4 9h16" />
-            </svg>
-          </button>
-          <button
-            className="palette-icon-btn"
-            title="New terminal"
-            aria-label="New terminal"
-            onClick={() => {
-              openNativeTerminal();
-              close();
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
-              <path d="m7 10 3 2-3 2" />
-              <path d="M11 14h4" />
-            </svg>
-          </button>
-        </div>
+        {matchedNewItems.length > 0 && (
+          <>
+            <div className="palette-section">New</div>
+            <div className="palette-grid">
+              {matchedNewItems.map((item) => (
+                <AppTile
+                  key={item.name}
+                  name={item.name}
+                  url={item.name}
+                  icon={item.icon}
+                  favoritable={false}
+                  onOpen={() => {
+                    item.action();
+                    close();
+                  }}
+                />
+              ))}
+            </div>
+          </>
+        )}
         {q && (
           <div className="palette-open-bar">
             <button className="palette-open-row" onClick={() => open(normalizeUrl(query))}>

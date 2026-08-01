@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { canvasController } from '../canvasController';
+import { snugget } from '../bridge';
 import { useStore } from '../store';
 import type { Desk, WindowNode } from '../types';
 
@@ -70,6 +71,46 @@ function ScreenRow({ desk, win, indent }: { desk: Desk; win: WindowNode; indent:
       >
         ×
       </button>
+    </div>
+  );
+}
+
+function GoogleConnect() {
+  const [connected, setConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    snugget.googleStatus().then((s) => setConnected(s.connected));
+  }, []);
+
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    const res = await snugget.googleSignIn();
+    setBusy(false);
+    setConnected(res.connected);
+    if (!res.connected) setError(res.error ?? 'Sign-in failed');
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    const res = await snugget.googleSignOut();
+    setBusy(false);
+    setConnected(res.connected);
+  };
+
+  return (
+    <div className="google-connect">
+      <button
+        className="google-connect-btn"
+        disabled={busy}
+        onClick={connected ? disconnect : connect}
+        title={connected ? 'Disconnect Google account' : 'Connect Google (Gmail/Calendar read access)'}
+      >
+        {busy ? 'Working…' : connected ? 'Google connected' : 'Connect Google'}
+      </button>
+      {error && <div className="google-connect-error">{error}</div>}
     </div>
   );
 }
@@ -239,6 +280,7 @@ export function Sidebar() {
       </div>
 
       <div className="sidebar-footer">
+        <GoogleConnect />
         <div><kbd>⇧A</kbd> open menu</div>
         <div><kbd>V</kbd> move · <kbd>H</kbd> hand</div>
         <div><kbd>⌘±</kbd> zoom · <kbd>⇧1</kbd> fit</div>

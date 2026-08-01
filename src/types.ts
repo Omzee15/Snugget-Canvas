@@ -11,11 +11,14 @@ export interface Viewport {
 // and reloads the running guest app.
 export interface WindowNode {
   id: string;
-  kind: 'web' | 'blank' | 'terminal';
+  kind: 'web' | 'blank' | 'terminal' | 'text' | 'image';
   url: string;
   title: string;
   favicon: string | null;
   terminalId?: string | null;
+  terminalOutput?: string;
+  text?: string;
+  imageDataUrl?: string;
   x: number;
   y: number;
   w: number;
@@ -47,6 +50,10 @@ export interface AppNotification {
   title: string;
   body: string;
   time: number;
+  // 'approval' notifications get quick-action buttons (Enter/Esc/y/n) that
+  // send a raw keystroke to the originating terminal's PTY.
+  kind?: 'approval' | 'success' | 'info';
+  terminalId?: string | null;
 }
 
 export interface Favorite {
@@ -77,10 +84,14 @@ declare global {
       onHotkey: (cb: (payload: { key: string }) => void) => void;
       getMemory: () => Promise<MemoryInfo | null>;
       openExternal: (url: string) => void;
-        createTerminal: () => Promise<{ id: string; output: string }>;
+        createTerminal: (cols?: number, rows?: number) => Promise<{ id: string; output: string }>;
         sendTerminalInput: (id: string, input: string) => void;
+        resizeTerminal: (id: string, cols: number, rows: number) => void;
         destroyTerminal: (id: string) => Promise<void>;
         onTerminalData: (cb: (payload: { id: string; chunk: string }) => void) => () => void;
+      googleSignIn: () => Promise<{ connected: boolean; error?: string }>;
+      googleStatus: () => Promise<{ connected: boolean }>;
+      googleSignOut: () => Promise<{ connected: boolean }>;
       webviewPreload: string;
     };
   }

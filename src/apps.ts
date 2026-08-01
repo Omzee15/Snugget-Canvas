@@ -132,3 +132,58 @@ export function openNativeTerminal() {
   };
   s.addWindow(desk.id, node);
 }
+
+export function openTextBox() {
+  const s = useStore.getState();
+  const desk = activeDesk(s);
+  if (!desk) return;
+
+  const center = canvasController.current?.screenCenterToWorld() ?? { x: 0, y: 0 };
+  const w = 360;
+  const h = 320;
+  const cascade = (desk.windows.length % 6) * 36;
+
+  const node: WindowNode = {
+    id: uid(),
+    kind: 'text',
+    url: '',
+    title: 'Text',
+    favicon: null,
+    text: '',
+    x: Math.round(center.x - w / 2 + cascade),
+    y: Math.round(center.y - h / 2 + cascade),
+    w,
+    h,
+    z: Math.max(0, ...desk.windows.map((win) => win.z)) + 1,
+    groupId: null
+  };
+  s.addWindow(desk.id, node);
+}
+
+// worldPos lets a paste-at-cursor caller (e.g. Ctrl/Cmd+V on the canvas)
+// place the image under the pointer instead of screen-center.
+export function openImage(dataUrl: string, worldPos?: { x: number; y: number }) {
+  const s = useStore.getState();
+  const desk = activeDesk(s);
+  if (!desk) return;
+
+  const center = worldPos ?? canvasController.current?.screenCenterToWorld() ?? { x: 0, y: 0 };
+  const w = 480;
+  const h = 360;
+
+  const node: WindowNode = {
+    id: uid(),
+    kind: 'image',
+    url: '',
+    title: 'Image',
+    favicon: null,
+    imageDataUrl: dataUrl,
+    x: Math.round(center.x - w / 2),
+    y: Math.round(center.y - h / 2),
+    w,
+    h,
+    z: Math.max(0, ...desk.windows.map((win) => win.z)) + 1,
+    groupId: null
+  };
+  s.addWindow(desk.id, node);
+}

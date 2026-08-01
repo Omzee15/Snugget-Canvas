@@ -233,13 +233,17 @@ export function CanvasView() {
       if (!panMode && !(e.button === 0 && isBg)) return;
       if (e.button === 0 && isBg && !panMode) {
         e.preventDefault();
-        const start = { x: e.clientX, y: e.clientY };
+        const rect = areaRect();
+        const startClient = { x: e.clientX, y: e.clientY };
+        let curClient = startClient;
+        const start = { x: startClient.x - rect.left, y: startClient.y - rect.top };
         let cur = start;
         setMarquee({ x: start.x, y: start.y, w: 0, h: 0 });
         document.body.classList.add('box-selecting');
         dragListen(
           (ev) => {
-            cur = { x: ev.clientX, y: ev.clientY };
+            curClient = { x: ev.clientX, y: ev.clientY };
+            cur = { x: curClient.x - rect.left, y: curClient.y - rect.top };
             setMarquee({
               x: Math.min(start.x, cur.x),
               y: Math.min(start.y, cur.y),
@@ -258,7 +262,7 @@ export function CanvasView() {
             }
 
             const desk = activeDesk(useStore.getState());
-            const box = screenRectToWorldRect(start, cur);
+            const box = screenRectToWorldRect(startClient, curClient);
             const matches = desk.windows
               .filter(
                 (win) =>

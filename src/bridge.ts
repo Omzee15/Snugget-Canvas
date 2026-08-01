@@ -7,10 +7,14 @@ interface SnuggetBridge {
   onHotkey: (cb: (payload: { key: string }) => void) => void;
   getMemory: () => Promise<MemoryInfo | null>;
   openExternal: (url: string) => void;
-  createTerminal: () => Promise<{ id: string; output: string }>;
+  createTerminal: (cols?: number, rows?: number) => Promise<{ id: string; output: string }>;
   sendTerminalInput: (id: string, input: string) => void;
+  resizeTerminal: (id: string, cols: number, rows: number) => void;
   destroyTerminal: (id: string) => Promise<void>;
   onTerminalData: (cb: (payload: { id: string; chunk: string }) => void) => () => void;
+  googleSignIn: () => Promise<{ connected: boolean; error?: string }>;
+  googleStatus: () => Promise<{ connected: boolean }>;
+  googleSignOut: () => Promise<{ connected: boolean }>;
   webviewPreload: string;
 }
 
@@ -26,8 +30,12 @@ export const snugget: SnuggetBridge = window.snugget ?? {
   openExternal: () => {},
   createTerminal: async () => ({ id: '', output: '' }),
   sendTerminalInput: () => {},
+  resizeTerminal: () => {},
   destroyTerminal: async () => {},
   onTerminalData: () => () => {},
+  googleSignIn: async () => ({ connected: false, error: 'not available outside Electron' }),
+  googleStatus: async () => ({ connected: false }),
+  googleSignOut: async () => ({ connected: false }),
   webviewPreload: ''
 };
 

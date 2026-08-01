@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { openApp } from './apps';
+import { openApp, openImage } from './apps';
 import { snugget } from './bridge';
 import { canvasController } from './canvasController';
 import { CanvasView } from './components/CanvasView';
@@ -88,7 +88,12 @@ export default function App() {
         s.setMode('select');
       } else if (!mod && e.key.toLowerCase() === 'h') {
         s.setMode('hand');
-      } else if ((e.key === 'Backspace' || e.key === 'Delete') && s.selectedWindowIds.length > 0) {
+      } else if (
+        e.shiftKey &&
+        (e.key === 'Backspace' || e.key === 'Delete') &&
+        s.selectedWindowIds.length > 0
+      ) {
+        e.preventDefault();
         const desk = activeDesk(s);
         s.selectedWindowIds.forEach((windowId) => s.removeWindow(desk.id, windowId));
       }
@@ -102,6 +107,29 @@ export default function App() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
+  }, []);
+
+  // Paste an image from the clipboard as a new canvas window. Skipped while
+  // focus is in a text input/textarea (e.g. the URL bar, a text-box window)
+  // so normal text paste there isn't hijacked.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (isTyping(e.target) || useStore.getState().paletteOpen) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageItem = Array.from(items).find((item) => item.type.startsWith('image/'));
+      if (!imageItem) return;
+      const file = imageItem.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') openImage(reader.result);
+      };
+      reader.readAsDataURL(file);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
   }, []);
 
   if (!hydrated) return null;

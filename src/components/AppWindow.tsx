@@ -4,6 +4,7 @@ import { snugget } from '../bridge';
 import { canvasController } from '../canvasController';
 import { dragListen } from '../drag';
 import { activeDesk, uid, useStore } from '../store';
+import { Terminal } from './Terminal';
 import type { WindowNode } from '../types';
 
 const MIN_W = 280;
@@ -49,6 +50,9 @@ interface Props {
 export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: Props) {
   const isBlank = node.kind === 'blank';
   const isTerminal = node.kind === 'terminal';
+  const isText = node.kind === 'text';
+  const isImage = node.kind === 'image';
+  const isWebview = !isTerminal && !isText && !isImage;
   const selected = useStore(
     (s) =>
       s.activeDeskId === deskId &&
@@ -60,9 +64,7 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
   // persistence), but rewriting the src attribute would reload the app.
   const [loadedUrl, setLoadedUrl] = useState(() => node.url || 'about:blank');
   const [draftUrl, setDraftUrl] = useState(() => node.url);
-  const [terminalOutput, setTerminalOutput] = useState('');
-  const [terminalInput, setTerminalInput] = useState('');
-  const terminalOutputRef = useRef<HTMLDivElement>(null);
+  const [terminalClearToken, setTerminalClearToken] = useState(0);
   const nodeRef = useRef(node);
   nodeRef.current = node;
 
@@ -70,48 +72,6 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
     if (!isBlank) return;
     setDraftUrl(node.url);
   }, [isBlank, node.url]);
-
-  useEffect(() => {
-    if (!isTerminal) return;
-    let disposed = false;
-
-    const sessionId = nodeRef.current.terminalId;
-
-    // Registered before the session is created so no terminal:data chunks
-    // emitted right after spawn are missed while createTerminal() is in flight.
-    const onTerminalData = (payload: { id: string; chunk: string }) => {
-      const currentId = nodeRef.current.terminalId;
-      if (!currentId || payload.id !== currentId) return;
-      setTerminalOutput((current) => current + payload.chunk);
-    };
-    const disposeTerminalListener = snugget.onTerminalData(onTerminalData);
-
-    const ensureSession = async () => {
-      if (sessionId) return;
-      const created = await snugget.createTerminal();
-      if (disposed) {
-        if (created.id) await snugget.destroyTerminal(created.id);
-        return;
-      }
-      useStore.getState().updateWindow(deskId, node.id, { terminalId: created.id });
-      if (created.output) setTerminalOutput((current) => current + created.output);
-    };
-
-    ensureSession().catch(() => {});
-
-    return () => {
-      disposed = true;
-      disposeTerminalListener?.();
-      const currentId = nodeRef.current.terminalId;
-      if (currentId) snugget.destroyTerminal(currentId).catch(() => {});
-    };
-  }, [deskId, isTerminal, node.id]);
-
-  useEffect(() => {
-    if (!isTerminal) return;
-    const el = terminalOutputRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [isTerminal, terminalOutput]);
 
   useEffect(() => {
     const wv = wvRef.current as any;
@@ -205,15 +165,6 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
     openInNativeBrowser(normalizeUrl(browserUrl));
   };
 
-  const submitTerminalInput = () => {
-    const text = terminalInput.trimEnd();
-    const currentId = nodeRef.current.terminalId;
-    if (!currentId || text.trim() === '') return;
-    setTerminalOutput((current) => current + `$ ${text}\n`);
-    snugget.sendTerminalInput(currentId, `${text}\n`);
-    setTerminalInput('');
-  };
-
   const selectSelf = () => {
     const s = useStore.getState();
     s.select(node.id);
@@ -235,25 +186,57 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
     // drag's direct style mutation keeps working).
     if (e.altKey) {
       const src = nodeRef.current;
-      s.addWindow(deskId, { ...src, id: uid() });
+      // A cloned terminal must get its own PTY, not the source's session id —
+      // otherwise both xterm UIs end up wired to the same live shell process.
+      s.addWindow(deskId, {
+        ...src,
+        id: uid(),
+        terminalId: src.kind === 'terminal' ? null : src.terminalId
+      });
     }
-    selectSelf();
-    const start = { mx: e.clientX, my: e.clientY, x: nodeRef.current.x, y: nodeRef.current.y };
-    let cur = { x: start.x, y: start.y };
+
+    // Dragging an already-selected window in a multi-selection should move
+    // the whole group — only collapse to single-select if this window isn't
+    // part of the current selection.
+    const inMultiSelect = s.selectedWindowIds.includes(node.id) && s.selectedWindowIds.length > 1;
+    if (!inMultiSelect) selectSelf();
+    else s.bringToFront(deskId, node.id);
+
+    const desk = activeDesk(useStore.getState());
+    const groupIds = inMultiSelect ? s.selectedWindowIds : [node.id];
+    const groupEls = new Map<string, HTMLElement>();
+    const groupStart = new Map<string, { x: number; y: number }>();
+    const world = rootRef.current?.closest('.world');
+    for (const id of groupIds) {
+      const win = desk.windows.find((w) => w.id === id);
+      if (!win) continue;
+      groupStart.set(id, { x: win.x, y: win.y });
+      const el =
+        id === node.id ? rootRef.current : (world?.querySelector(`[data-window-id="${id}"]`) as HTMLElement | null);
+      if (el) groupEls.set(id, el);
+    }
+
+    const start = { mx: e.clientX, my: e.clientY };
+    const finalPos = new Map(groupStart);
     dragListen(
       (ev) => {
         const zoom = currentZoom();
-        cur = {
-          x: start.x + (ev.clientX - start.mx) / zoom,
-          y: start.y + (ev.clientY - start.my) / zoom
-        };
-        const el = rootRef.current;
-        if (el) {
-          el.style.left = `${cur.x}px`;
-          el.style.top = `${cur.y}px`;
+        const dx = (ev.clientX - start.mx) / zoom;
+        const dy = (ev.clientY - start.my) / zoom;
+        for (const [id, from] of groupStart) {
+          const next = { x: from.x + dx, y: from.y + dy };
+          finalPos.set(id, next);
+          const el = groupEls.get(id);
+          if (el) {
+            el.style.left = `${next.x}px`;
+            el.style.top = `${next.y}px`;
+          }
         }
       },
-      () => useStore.getState().updateWindow(deskId, node.id, cur)
+      () => {
+        const st = useStore.getState();
+        for (const [id, pos] of finalPos) st.updateWindow(deskId, id, pos);
+      }
     );
   };
 
@@ -315,6 +298,7 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
   return (
     <div
       ref={rootRef}
+      data-window-id={node.id}
       className={`app-window${selected ? ' selected' : ''}`}
       style={{
         left: node.x,
@@ -372,12 +356,12 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
           </>
         )}
         <div className="titlebar-actions">
-          {!isBlank && !isTerminal && (
+          {isWebview && !isBlank && (
             <button title="Open in browser" onClick={openExternal} onPointerDown={(e) => e.stopPropagation()}>
               ↗
             </button>
           )}
-          {!isBlank && !isTerminal && (
+          {isWebview && !isBlank && (
             <div className="nav-pair">
               <button title="Back" onClick={nav('back')} onPointerDown={(e) => e.stopPropagation()}>
                 ‹
@@ -391,7 +375,7 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
               </button>
             </div>
           )}
-          {!isTerminal && (
+          {isWebview && (
             <button
               title="Reload"
               onClick={nav('reload')}
@@ -401,7 +385,11 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
             </button>
           )}
           {isTerminal && (
-            <button title="Clear terminal" onClick={() => setTerminalOutput('')} onPointerDown={(e) => e.stopPropagation()}>
+            <button
+              title="Clear terminal"
+              onClick={() => setTerminalClearToken((n) => n + 1)}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
               ⌧
             </button>
           )}
@@ -418,28 +406,20 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
       <div className="window-content">
         {isTerminal ? (
           <div className="terminal-shell">
-            <div ref={terminalOutputRef} className="terminal-output">
-              <pre>{terminalOutput || 'Starting terminal...\n'}</pre>
-            </div>
-            <form
-              className="terminal-input-row"
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitTerminalInput();
-              }}
-            >
-              <span className="terminal-prompt">$</span>
-              <input
-                className="terminal-input"
-                value={terminalInput}
-                onChange={(e) => setTerminalInput(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-                autoCapitalize="off"
-                autoCorrect="off"
-                placeholder="Type a command and press Enter"
-              />
-            </form>
+            <Terminal deskId={deskId} node={node} clearToken={terminalClearToken} />
+          </div>
+        ) : isText ? (
+          <textarea
+            className="text-box"
+            value={node.text ?? ''}
+            placeholder="Type a note…"
+            spellCheck={false}
+            onChange={(e) => useStore.getState().updateWindow(deskId, node.id, { text: e.target.value })}
+            onPointerDown={(e) => e.stopPropagation()}
+          />
+        ) : isImage ? (
+          <div className="image-box">
+            {node.imageDataUrl && <img src={node.imageDataUrl} alt="" draggable={false} />}
           </div>
         ) : (
           <webview
