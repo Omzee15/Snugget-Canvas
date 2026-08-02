@@ -15,7 +15,9 @@ try {
 
 // Cmd/Ctrl+scroll and pinch gestures over a guest app should zoom the canvas,
 // not the page inside the window. Guest coordinates are forwarded so the host
-// can zoom around the cursor.
+// can zoom around the cursor. Plain two-finger scroll is also forwarded so an
+// unselected window's content doesn't swallow canvas panning — the host
+// decides whether to actually pan (only when this window isn't selected).
 window.addEventListener(
   'wheel',
   (e) => {
@@ -25,6 +27,11 @@ window.addEventListener(
         deltaY: e.deltaY,
         x: e.clientX,
         y: e.clientY
+      });
+    } else {
+      ipcRenderer.sendToHost('canvas-pan', {
+        deltaX: e.deltaX,
+        deltaY: e.deltaY
       });
     }
   },

@@ -284,6 +284,7 @@ export function Sidebar() {
         <div><kbd>⇧A</kbd> open menu</div>
         <div><kbd>V</kbd> move · <kbd>H</kbd> hand</div>
         <div><kbd>⌘±</kbd> zoom · <kbd>⇧1</kbd> fit</div>
+        <div><kbd>⇧⌫</kbd> close window</div>
       </div>
     </aside>
   );

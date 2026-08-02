@@ -180,6 +180,11 @@ export function CanvasView() {
       };
     };
 
+    const panBy = (dx: number, dy: number) => {
+      const vp = vpRef.current;
+      setVp(vp.x - dx, vp.y - dy, vp.zoom);
+    };
+
     canvasController.current = {
       zoomAtScreenPoint,
       zoomAtCenter,
@@ -187,7 +192,8 @@ export function CanvasView() {
       zoomToFit,
       focusWindow,
       jumpToWindow,
-      screenCenterToWorld
+      screenCenterToWorld,
+      panBy
     };
 
     const area = areaRef.current;

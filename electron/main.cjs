@@ -30,6 +30,7 @@ function createTerminalSession(cols, rows) {
   ptyProcess.onExit(({ exitCode }) => {
     terminalSessions.delete(id);
     sendTerminalData(id, `\r\n[process exited: ${exitCode}]\r\n`);
+    if (mainWindow) mainWindow.webContents.send('terminal:exit', { id, exitCode });
   });
 
   return { id, output: '' };
@@ -99,12 +100,17 @@ app.on('web-contents-created', (_event, contents) => {
     return { action: 'deny' };
   });
 
-  // Canvas zoom shortcuts must work even while a guest app has keyboard focus
+  // Canvas zoom/delete shortcuts must work even while a guest app has keyboard focus
   contents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown' || !(input.meta || input.control)) return;
-    if (['=', '+', '-', '0'].includes(input.key)) {
+    if (input.type !== 'keyDown') return;
+    if ((input.meta || input.control) && ['=', '+', '-', '0'].includes(input.key)) {
       event.preventDefault();
       if (mainWindow) mainWindow.webContents.send('hotkey', { key: input.key });
+      return;
+    }
+    if (input.shift && ['Backspace', 'Delete'].includes(input.key)) {
+      event.preventDefault();
+      if (mainWindow) mainWindow.webContents.send('hotkey', { key: input.key, shift: true });
     }
   });
 });

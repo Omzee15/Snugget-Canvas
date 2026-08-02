@@ -13,6 +13,13 @@ const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement &&
   (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 
+const deleteSelected = () => {
+  const s = useStore.getState();
+  if (s.selectedWindowIds.length === 0) return;
+  const desk = activeDesk(s);
+  s.selectedWindowIds.forEach((windowId) => s.removeWindow(desk.id, windowId));
+};
+
 export default function App() {
   const hydrated = useStore((s) => s.hydrated);
   const paletteOpen = useStore((s) => s.paletteOpen);
@@ -40,10 +47,14 @@ export default function App() {
     };
   }, []);
 
-  // IPC from main: popups from guest apps + zoom hotkeys pressed while a guest has focus
+  // IPC from main: popups from guest apps + zoom/delete hotkeys pressed while a guest has focus
   useEffect(() => {
     snugget.onOpenUrl((url) => openApp(url));
-    snugget.onHotkey(({ key }) => {
+    snugget.onHotkey(({ key, shift }) => {
+      if (shift && (key === 'Backspace' || key === 'Delete')) {
+        deleteSelected();
+        return;
+      }
       const c = canvasController.current;
       if (!c) return;
       if (key === '0') c.setZoomCenter(1);
@@ -88,14 +99,9 @@ export default function App() {
         s.setMode('select');
       } else if (!mod && e.key.toLowerCase() === 'h') {
         s.setMode('hand');
-      } else if (
-        e.shiftKey &&
-        (e.key === 'Backspace' || e.key === 'Delete') &&
-        s.selectedWindowIds.length > 0
-      ) {
+      } else if (e.shiftKey && (e.key === 'Backspace' || e.key === 'Delete')) {
         e.preventDefault();
-        const desk = activeDesk(s);
-        s.selectedWindowIds.forEach((windowId) => s.removeWindow(desk.id, windowId));
+        deleteSelected();
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {

@@ -21,7 +21,7 @@ export const PRESETS: AppPreset[] = [
   { name: 'GitHub', url: 'https://github.com', domain: 'github.com' },
   { name: 'YouTube', url: 'https://www.youtube.com', domain: 'youtube.com' },
   { name: 'ChatGPT', url: 'https://chatgpt.com', domain: 'chatgpt.com' },
-  { name: 'Claude', url: 'https://claude.ai', domain: 'claude.ai' },
+  { name: 'Claude Web', url: 'https://claude.ai', domain: 'claude.ai' },
   { name: 'Figma', url: 'https://www.figma.com', domain: 'figma.com' },
   { name: 'Spotify', url: 'https://open.spotify.com', domain: 'open.spotify.com' },
   { name: 'X', url: 'https://x.com', domain: 'x.com' },
@@ -106,7 +106,7 @@ export function openInNativeBrowser(url: string) {
   snugget.openExternal(nextUrl);
 }
 
-export function openNativeTerminal() {
+function openTerminal(title: string, initialCommand: string | null) {
   const s = useStore.getState();
   const desk = activeDesk(s);
   if (!desk) return;
@@ -120,9 +120,10 @@ export function openNativeTerminal() {
     id: uid(),
     kind: 'terminal',
     url: '',
-    title: 'Terminal',
+    title,
     favicon: null,
     terminalId: null,
+    initialCommand,
     x: Math.round(center.x - w / 2 + cascade),
     y: Math.round(center.y - h / 2 + cascade),
     w,
@@ -131,6 +132,14 @@ export function openNativeTerminal() {
     groupId: null
   };
   s.addWindow(desk.id, node);
+}
+
+export function openNativeTerminal() {
+  openTerminal('Terminal', null);
+}
+
+export function openClaudeTerminal() {
+  openTerminal('Claude Code', 'claude');
 }
 
 export function openTextBox() {

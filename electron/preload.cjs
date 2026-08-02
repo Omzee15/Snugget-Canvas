@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('snugget', {
     ipcRenderer.on('terminal:data', listener);
     return () => ipcRenderer.removeListener('terminal:data', listener);
   },
+  onTerminalExit: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('terminal:exit', listener);
+    return () => ipcRenderer.removeListener('terminal:exit', listener);
+  },
   googleSignIn: () => ipcRenderer.invoke('google:signin'),
   googleStatus: () => ipcRenderer.invoke('google:status'),
   googleSignOut: () => ipcRenderer.invoke('google:signout'),

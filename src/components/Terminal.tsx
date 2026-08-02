@@ -10,8 +10,6 @@ import '@xterm/xterm/css/xterm.css';
 interface Props {
   deskId: string;
   node: WindowNode;
-  // Bumped by the parent's "Clear terminal" button to trigger an imperative xterm.clear().
-  clearToken: number;
 }
 
 const SUCCESS_RE = /\b(success(?:fully)?|completed|all tests passed|build succeeded)\b/i;
@@ -29,7 +27,18 @@ const IDLE_MS = 350;
 const REALERT_MS = 15000;
 const SNIPPET_LINES = 6;
 
-export function Terminal({ deskId, node, clearToken }: Props) {
+// Strip volatile substrings (live elapsed-time counters, spinner frames)
+// before comparing two snapshots — otherwise a still-open prompt whose only
+// change is "Baked for 9s" -> "Baked for 12s" reads as new and re-notifies.
+function normalizeForCompare(s: string) {
+  return s
+    .replace(/\b\w+ for \d+s\b/gi, '')
+    .replace(/[✢✳✻✽·•●○◐◑◒◓]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function Terminal({ deskId, node }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const nodeRef = useRef(node);
@@ -95,16 +104,29 @@ export function Terminal({ deskId, node, clearToken }: Props) {
     };
 
     let lastAlertKind: 'success' | 'approval' | null = null;
-    let lastAlertBody = '';
+    let lastAlertNormBody = '';
     let lastAlertAt = 0;
+    const clearStaleApprovals = () => {
+      const s = useStore.getState();
+      s.notifications
+        .filter((n) => n.windowId === nodeRef.current.id && n.kind === 'approval')
+        .forEach((n) => s.removeNotification(n.id));
+    };
     const notifyOnce = (kind: 'success' | 'approval', body: string) => {
       const now = Date.now();
-      // Skip if the same kind+text already alerted recently (cursor-blink /
-      // keystroke redraws reprint an identical screen many times a second).
-      if (kind === lastAlertKind && body === lastAlertBody && now - lastAlertAt < REALERT_MS) return;
+      const normBody = normalizeForCompare(body);
+      // Skip if the same kind+text (ignoring volatile bits like a live
+      // elapsed-time counter) already alerted recently — cursor-blink /
+      // keystroke redraws reprint an effectively unchanged screen constantly.
+      if (kind === lastAlertKind && normBody === lastAlertNormBody && now - lastAlertAt < REALERT_MS) {
+        return;
+      }
       lastAlertKind = kind;
-      lastAlertBody = body;
+      lastAlertNormBody = normBody;
       lastAlertAt = now;
+      // A fresh approval prompt supersedes any earlier one still sitting in
+      // the list for this terminal — only the latest ask is still relevant.
+      if (kind === 'approval') clearStaleApprovals();
       const win = nodeRef.current;
       useStore.getState().addNotification({
         id: uid(),
@@ -143,6 +165,10 @@ export function Terminal({ deskId, node, clearToken }: Props) {
         notifyOnce('approval', snippet);
         return;
       }
+      // The screen no longer shows a prompt — whatever was pending got
+      // answered or scrolled past, so any "Approval needed" alert for this
+      // terminal is now stale.
+      clearStaleApprovals();
       if (SUCCESS_RE.test(snippet)) notifyOnce('success', snippet);
     };
 
@@ -158,7 +184,10 @@ export function Terminal({ deskId, node, clearToken }: Props) {
       if (sessionId) snugget.sendTerminalInput(sessionId, data);
     });
 
-    const ensureSession = async () => {
+    // useInitialCommand only applies to a brand-new window's first-ever PTY
+    // (e.g. "claude" for a Claude Code tile) — a respawn after the shell
+    // exits should just be a plain fresh shell, not re-run that command.
+    const ensureSession = async (useInitialCommand: boolean) => {
       if (sessionId) return;
       const created = await snugget.createTerminal(xterm.cols, xterm.rows);
       if (disposed) {
@@ -166,11 +195,28 @@ export function Terminal({ deskId, node, clearToken }: Props) {
         return;
       }
       sessionId = created.id;
-      useStore.getState().updateWindow(deskId, nodeRef.current.id, { terminalId: created.id });
+      const initialCommand = useInitialCommand ? nodeRef.current.initialCommand : null;
+      useStore.getState().updateWindow(deskId, nodeRef.current.id, {
+        terminalId: created.id,
+        initialCommand: null
+      });
       if (created.output) xterm.write(created.output);
+      if (initialCommand) snugget.sendTerminalInput(created.id, `${initialCommand}\r`);
     };
 
-    ensureSession().catch(() => {});
+    ensureSession(true).catch(() => {});
+
+    // The shell can exit on its own (typed "exit", crashed, etc.) — without
+    // this the window is left showing "[process exited]" with no way to type
+    // again, since sessionId still points at a session main.cjs has already
+    // torn down. Spawn a replacement so the window stays usable.
+    const onTerminalExit = (payload: { id: string; exitCode: number }) => {
+      if (payload.id !== sessionId) return;
+      sessionId = null;
+      useStore.getState().updateWindow(deskId, nodeRef.current.id, { terminalId: null });
+      ensureSession(false).catch(() => {});
+    };
+    const disposeExitListener = snugget.onTerminalExit(onTerminalExit);
 
     const resizeObserver = new ResizeObserver(() => {
       try {
@@ -197,19 +243,18 @@ export function Terminal({ deskId, node, clearToken }: Props) {
       persistBuffer();
       resizeObserver.disconnect();
       disposeTerminalListener?.();
+      disposeExitListener?.();
       onDataDisposable.dispose();
       onDataForPersist.dispose();
-      if (sessionId) snugget.destroyTerminal(sessionId).catch(() => {});
+      if (sessionId) {
+        snugget.destroyTerminal(sessionId).catch(() => {});
+        clearStaleApprovals();
+      }
       xterm.dispose();
       xtermRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deskId, node.id]);
-
-  useEffect(() => {
-    if (clearToken === 0) return;
-    xtermRef.current?.clear();
-  }, [clearToken]);
 
   return <div ref={containerRef} className="terminal-xterm" />;
 }

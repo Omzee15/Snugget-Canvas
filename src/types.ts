@@ -17,6 +17,9 @@ export interface WindowNode {
   favicon: string | null;
   terminalId?: string | null;
   terminalOutput?: string;
+  // Command to auto-run once when this terminal's PTY is first created (e.g.
+  // "claude"). Cleared right after being sent so it never re-fires.
+  initialCommand?: string | null;
   text?: string;
   imageDataUrl?: string;
   x: number;
@@ -81,7 +84,7 @@ declare global {
       loadState: () => Promise<PersistedState | null>;
       saveState: (state: PersistedState) => void;
       onOpenUrl: (cb: (url: string) => void) => void;
-      onHotkey: (cb: (payload: { key: string }) => void) => void;
+      onHotkey: (cb: (payload: { key: string; shift?: boolean }) => void) => void;
       getMemory: () => Promise<MemoryInfo | null>;
       openExternal: (url: string) => void;
         createTerminal: (cols?: number, rows?: number) => Promise<{ id: string; output: string }>;
@@ -89,6 +92,7 @@ declare global {
         resizeTerminal: (id: string, cols: number, rows: number) => void;
         destroyTerminal: (id: string) => Promise<void>;
         onTerminalData: (cb: (payload: { id: string; chunk: string }) => void) => () => void;
+        onTerminalExit: (cb: (payload: { id: string; exitCode: number }) => void) => () => void;
       googleSignIn: () => Promise<{ connected: boolean; error?: string }>;
       googleStatus: () => Promise<{ connected: boolean }>;
       googleSignOut: () => Promise<{ connected: boolean }>;

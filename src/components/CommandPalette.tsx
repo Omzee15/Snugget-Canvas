@@ -4,6 +4,7 @@ import {
   normalizeUrl,
   openApp,
   openBlankPage,
+  openClaudeTerminal,
   openNativeTerminal,
   openTextBox,
   PRESETS,
@@ -113,6 +114,38 @@ const TEXT_ICON = (
   </svg>
 );
 
+const CLAUDE_ICON = (
+  <svg
+    className="palette-app-icon"
+    width="28"
+    height="28"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M12 3v4" />
+    <path d="M12 17v4" />
+    <path d="M3 12h4" />
+    <path d="M17 12h4" />
+    <path d="M5.6 5.6l2.8 2.8" />
+    <path d="M15.6 15.6l2.8 2.8" />
+    <path d="M18.4 5.6l-2.8 2.8" />
+    <path d="M8.4 15.6l-2.8 2.8" />
+  </svg>
+);
+
+// Non-website window kinds (terminal, text, blank, Claude) rendered as
+// regular tiles in the Apps grid, same as any website.
+const BUILTIN_ITEMS = [
+  { name: 'New window', icon: NEW_WINDOW_ICON, action: openBlankPage },
+  { name: 'Terminal', icon: TERMINAL_ICON, action: openNativeTerminal },
+  { name: 'Claude Code', icon: CLAUDE_ICON, action: openClaudeTerminal },
+  { name: 'Text box', icon: TEXT_ICON, action: openTextBox }
+];
+
 export function CommandPalette() {
   const [query, setQuery] = useState('');
   const favorites = useStore((s) => s.favorites);
@@ -130,19 +163,17 @@ export function CommandPalette() {
   const matchedPresets = q
     ? PRESETS.filter((p) => p.name.toLowerCase().includes(q))
     : PRESETS;
-  const NEW_ITEMS = [
-    { name: 'New window', icon: NEW_WINDOW_ICON, action: openBlankPage },
-    { name: 'Terminal', icon: TERMINAL_ICON, action: openNativeTerminal },
-    { name: 'Text box', icon: TEXT_ICON, action: openTextBox }
-  ];
-  const matchedNewItems = q
-    ? NEW_ITEMS.filter((n) => n.name.toLowerCase().includes(q))
-    : NEW_ITEMS;
+  const matchedBuiltins = q
+    ? BUILTIN_ITEMS.filter((n) => n.name.toLowerCase().includes(q))
+    : BUILTIN_ITEMS;
 
   const submit = () => {
     if (!q) return;
     if (matchedFavs.length > 0 && !query.includes('.')) open(matchedFavs[0].url);
-    else if (matchedPresets.length > 0 && !query.includes('.')) open(matchedPresets[0].url);
+    else if (matchedBuiltins.length > 0 && !query.includes('.')) {
+      matchedBuiltins[0].action();
+      close();
+    } else if (matchedPresets.length > 0 && !query.includes('.')) open(matchedPresets[0].url);
     else open(normalizeUrl(query));
   };
 
@@ -163,26 +194,6 @@ export function CommandPalette() {
             if (e.key === 'Enter') submit();
           }}
         />
-        {matchedNewItems.length > 0 && (
-          <>
-            <div className="palette-section">New</div>
-            <div className="palette-grid">
-              {matchedNewItems.map((item) => (
-                <AppTile
-                  key={item.name}
-                  name={item.name}
-                  url={item.name}
-                  icon={item.icon}
-                  favoritable={false}
-                  onOpen={() => {
-                    item.action();
-                    close();
-                  }}
-                />
-              ))}
-            </div>
-          </>
-        )}
         {q && (
           <div className="palette-open-bar">
             <button className="palette-open-row" onClick={() => open(normalizeUrl(query))}>
@@ -211,6 +222,19 @@ export function CommandPalette() {
 
         <div className="palette-section">Apps</div>
         <div className="palette-grid">
+          {matchedBuiltins.map((item) => (
+            <AppTile
+              key={item.name}
+              name={item.name}
+              url={item.name}
+              icon={item.icon}
+              favoritable={false}
+              onOpen={() => {
+                item.action();
+                close();
+              }}
+            />
+          ))}
           {matchedPresets.map((p) => (
             <AppTile key={p.url} name={p.name} url={p.url} onOpen={open} />
           ))}

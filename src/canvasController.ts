@@ -8,6 +8,7 @@ export interface CanvasController {
   focusWindow: (windowId: string) => void;
   jumpToWindow: (windowId: string) => void;
   screenCenterToWorld: () => { x: number; y: number };
+  panBy: (dx: number, dy: number) => void;
 }
 
 export const canvasController: { current: CanvasController | null } = { current: null };

@@ -64,9 +64,10 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
   // persistence), but rewriting the src attribute would reload the app.
   const [loadedUrl, setLoadedUrl] = useState(() => node.url || 'about:blank');
   const [draftUrl, setDraftUrl] = useState(() => node.url);
-  const [terminalClearToken, setTerminalClearToken] = useState(0);
   const nodeRef = useRef(node);
   nodeRef.current = node;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   useEffect(() => {
     if (!isBlank) return;
@@ -106,6 +107,14 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
           body: p.body ?? '',
           time: Date.now()
         });
+        return;
+      }
+      if (e.channel === 'canvas-pan') {
+        // Only pan on behalf of an unselected window — a selected one should
+        // keep scrolling its own content like a normal browser tab.
+        if (selectedRef.current) return;
+        const p = e.args[0];
+        canvasController.current?.panBy(p.deltaX, p.deltaY);
         return;
       }
       if (e.channel !== 'canvas-wheel') return;
@@ -384,15 +393,6 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
               ⟳
             </button>
           )}
-          {isTerminal && (
-            <button
-              title="Clear terminal"
-              onClick={() => setTerminalClearToken((n) => n + 1)}
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              ⌧
-            </button>
-          )}
           <button
             className="close"
             title="Close window"
@@ -406,7 +406,7 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
       <div className="window-content">
         {isTerminal ? (
           <div className="terminal-shell">
-            <Terminal deskId={deskId} node={node} clearToken={terminalClearToken} />
+            <Terminal deskId={deskId} node={node} />
           </div>
         ) : isText ? (
           <textarea
