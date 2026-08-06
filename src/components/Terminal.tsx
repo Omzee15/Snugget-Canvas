@@ -4,6 +4,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { snugget } from '../bridge';
 import { useStore, uid } from '../store';
+import { canvasController } from '../canvasController';
+import { comboFromEvent } from '../keybindings';
 import type { WindowNode } from '../types';
 import '@xterm/xterm/css/xterm.css';
 
@@ -38,6 +40,17 @@ function normalizeForCompare(s: string) {
     .trim();
 }
 
+// OSC 7 payload is "file://<host>/<path>" — pull just the path back out.
+function parseOsc7(data: string): string | null {
+  const match = data.match(/^file:\/\/[^/]*(\/.*)$/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 export function Terminal({ deskId, node }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -65,10 +78,35 @@ export function Terminal({ deskId, node }: Props) {
     xterm.open(container);
     xtermRef.current = xterm;
 
+    // The canvas can be zoomed (CSS `scale()` on an ancestor), which resizes
+    // windows visually but not in the DOM's own unscaled layout box. xterm
+    // measures cell size from that unscaled box, while mouse events report
+    // real (scaled) screen coordinates — at any zoom other than 100% those two
+    // units disagree, so drag-selection lands on the wrong row/column. Rewrite
+    // clientX/clientY to their unscaled equivalents before xterm's own
+    // mousedown/move/up handlers (bound on its internal DOM) see them; a
+    // capture-phase listener on this container always runs first regardless
+    // of where xterm attaches its own listeners.
+    const unscalePointer = (e: MouseEvent) => {
+      const zoom = canvasController.current?.getZoom() ?? 1;
+      if (zoom === 1) return;
+      const rect = container.getBoundingClientRect();
+      const x = rect.left + (e.clientX - rect.left) / zoom;
+      const y = rect.top + (e.clientY - rect.top) / zoom;
+      Object.defineProperty(e, 'clientX', { value: x, configurable: true });
+      Object.defineProperty(e, 'clientY', { value: y, configurable: true });
+    };
+    container.addEventListener('mousedown', unscalePointer, true);
+    container.addEventListener('mousemove', unscalePointer, true);
+    container.addEventListener('mouseup', unscalePointer, true);
+
     // Cmd/Ctrl+C copies the selection like a normal terminal app (xterm.js
     // renders selection itself but never touches the OS clipboard); with no
     // selection, let it fall through so it still sends SIGINT as usual.
-    // Cmd/Ctrl+V pastes clipboard text as input.
+    // Cmd/Ctrl+V is NOT handled here — xterm's own hidden textarea already
+    // receives the native browser "paste" event and forwards it through
+    // onData on its own; also reading the clipboard here as well caused a
+    // double-paste.
     xterm.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
       const mod = ev.metaKey || ev.ctrlKey;
@@ -76,13 +114,22 @@ export function Terminal({ deskId, node }: Props) {
         navigator.clipboard.writeText(xterm.getSelection()).catch(() => {});
         return false;
       }
-      if (mod && ev.key.toLowerCase() === 'v') {
-        navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text && sessionId) snugget.sendTerminalInput(sessionId, text);
-          })
-          .catch(() => {});
+      // xterm's default handling stops propagation on keys it processes, so
+      // App.tsx's window-level shortcut handler never sees them while a
+      // terminal has focus — handle the modal-open ones directly here
+      // instead, same as any other in-app trigger.
+      const combo = comboFromEvent(ev);
+      const kb = useStore.getState().keybindings;
+      if (combo === kb.deselect) {
+        useStore.getState().select(null);
+        return false;
+      }
+      if (combo === kb.palette) {
+        useStore.getState().setPaletteOpen(!useStore.getState().paletteOpen);
+        return false;
+      }
+      if (combo === kb.bookmarks) {
+        useStore.getState().setBookmarksOpen(!useStore.getState().bookmarksOpen);
         return false;
       }
       return true;
@@ -97,11 +144,28 @@ export function Terminal({ deskId, node }: Props) {
 
     let disposed = false;
     let sessionId = nodeRef.current.terminalId;
+    let currentCwd = nodeRef.current.cwd;
 
     const persistBuffer = () => {
       const serialized = serializeAddon.serialize();
       useStore.getState().updateWindow(deskId, nodeRef.current.id, { terminalOutput: serialized });
     };
+
+    // Shells don't emit OSC 7 by default (main.cjs injects a zsh precmd hook
+    // that does) — each prompt redraw reports the live cwd here, so a
+    // respawned/restored session can start back where the user left off
+    // instead of always resetting to home.
+    let cwdPersistTimer: ReturnType<typeof setTimeout>;
+    const oscHandler = xterm.parser.registerOscHandler(7, (data) => {
+      const dir = parseOsc7(data);
+      if (!dir) return false;
+      currentCwd = dir;
+      clearTimeout(cwdPersistTimer);
+      cwdPersistTimer = setTimeout(() => {
+        useStore.getState().updateWindow(deskId, nodeRef.current.id, { cwd: currentCwd });
+      }, 400);
+      return true;
+    });
 
     let lastAlertKind: 'success' | 'approval' | null = null;
     let lastAlertNormBody = '';
@@ -189,7 +253,7 @@ export function Terminal({ deskId, node }: Props) {
     // exits should just be a plain fresh shell, not re-run that command.
     const ensureSession = async (useInitialCommand: boolean) => {
       if (sessionId) return;
-      const created = await snugget.createTerminal(xterm.cols, xterm.rows);
+      const created = await snugget.createTerminal(xterm.cols, xterm.rows, currentCwd);
       if (disposed) {
         if (created.id) await snugget.destroyTerminal(created.id);
         return;
@@ -240,12 +304,18 @@ export function Terminal({ deskId, node }: Props) {
       disposed = true;
       clearTimeout(persistTimer);
       clearTimeout(idleTimer);
+      clearTimeout(cwdPersistTimer);
       persistBuffer();
+      if (currentCwd) useStore.getState().updateWindow(deskId, nodeRef.current.id, { cwd: currentCwd });
       resizeObserver.disconnect();
+      container.removeEventListener('mousedown', unscalePointer, true);
+      container.removeEventListener('mousemove', unscalePointer, true);
+      container.removeEventListener('mouseup', unscalePointer, true);
       disposeTerminalListener?.();
       disposeExitListener?.();
       onDataDisposable.dispose();
       onDataForPersist.dispose();
+      oscHandler.dispose();
       if (sessionId) {
         snugget.destroyTerminal(sessionId).catch(() => {});
         clearStaleApprovals();

@@ -13,7 +13,8 @@ contextBridge.exposeInMainWorld('snugget', {
   onHotkey: (cb) => ipcRenderer.on('hotkey', (_e, payload) => cb(payload)),
   getMemory: () => ipcRenderer.invoke('sys:memory'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
-  createTerminal: (cols, rows) => ipcRenderer.invoke('terminal:create', { cols, rows }),
+  listDirectory: (dirPath) => ipcRenderer.invoke('fs:list-dir', dirPath),
+  createTerminal: (cols, rows, cwd) => ipcRenderer.invoke('terminal:create', { cols, rows, cwd }),
   sendTerminalInput: (id, input) => ipcRenderer.send('terminal:input', { id, input }),
   resizeTerminal: (id, cols, rows) => ipcRenderer.send('terminal:resize', { id, cols, rows }),
   destroyTerminal: (id) => ipcRenderer.invoke('terminal:destroy', id),
@@ -30,5 +31,19 @@ contextBridge.exposeInMainWorld('snugget', {
   googleSignIn: () => ipcRenderer.invoke('google:signin'),
   googleStatus: () => ipcRenderer.invoke('google:status'),
   googleSignOut: () => ipcRenderer.invoke('google:signout'),
+  openNativeApp: (windowId, app) => ipcRenderer.invoke('native:open', { windowId, app }),
+  closeNativeApp: (windowId) => ipcRenderer.invoke('native:close', windowId),
+  onNativeFrame: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('native:frame', listener);
+    return () => ipcRenderer.removeListener('native:frame', listener);
+  },
+  onNativeMessage: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('native:message', listener);
+    return () => ipcRenderer.removeListener('native:message', listener);
+  },
+  attachDevTools: (targetId, hostId) => ipcRenderer.invoke('devtools:attach', { targetId, hostId }),
+  detachDevTools: (targetId) => ipcRenderer.invoke('devtools:detach', { targetId }),
   webviewPreload
 });

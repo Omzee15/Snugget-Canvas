@@ -8,7 +8,9 @@ export interface CanvasController {
   focusWindow: (windowId: string) => void;
   jumpToWindow: (windowId: string) => void;
   screenCenterToWorld: () => { x: number; y: number };
+  screenToWorld: (sx: number, sy: number) => { x: number; y: number };
   panBy: (dx: number, dy: number) => void;
+  getZoom: () => number;
 }
 
 export const canvasController: { current: CanvasController | null } = { current: null };

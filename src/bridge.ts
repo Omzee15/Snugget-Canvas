@@ -1,13 +1,21 @@
-import type { MemoryInfo, PersistedState } from './types';
+import type {
+  DirListing,
+  MemoryInfo,
+  NativeAppKind,
+  NativeFramePayload,
+  NativeMessagePayload,
+  PersistedState
+} from './types';
 
 interface SnuggetBridge {
   loadState: () => Promise<PersistedState | null>;
   saveState: (state: PersistedState) => void;
   onOpenUrl: (cb: (url: string) => void) => void;
-  onHotkey: (cb: (payload: { key: string; shift?: boolean }) => void) => void;
+  onHotkey: (cb: (payload: { key: string; shift?: boolean; meta?: boolean }) => void) => void;
   getMemory: () => Promise<MemoryInfo | null>;
   openExternal: (url: string) => void;
-  createTerminal: (cols?: number, rows?: number) => Promise<{ id: string; output: string }>;
+  listDirectory: (dirPath?: string) => Promise<DirListing>;
+  createTerminal: (cols?: number, rows?: number, cwd?: string) => Promise<{ id: string; output: string }>;
   sendTerminalInput: (id: string, input: string) => void;
   resizeTerminal: (id: string, cols: number, rows: number) => void;
   destroyTerminal: (id: string) => Promise<void>;
@@ -16,6 +24,12 @@ interface SnuggetBridge {
   googleSignIn: () => Promise<{ connected: boolean; error?: string }>;
   googleStatus: () => Promise<{ connected: boolean }>;
   googleSignOut: () => Promise<{ connected: boolean }>;
+  openNativeApp: (windowId: string, app: NativeAppKind) => Promise<void>;
+  closeNativeApp: (windowId: string) => Promise<void>;
+  onNativeFrame: (cb: (payload: NativeFramePayload) => void) => () => void;
+  onNativeMessage: (cb: (payload: NativeMessagePayload) => void) => () => void;
+  attachDevTools: (targetId: number, hostId: number) => Promise<boolean>;
+  detachDevTools: (targetId: number) => Promise<void>;
   webviewPreload: string;
 }
 
@@ -29,6 +43,7 @@ export const snugget: SnuggetBridge = window.snugget ?? {
   onHotkey: () => {},
   getMemory: async () => null,
   openExternal: () => {},
+  listDirectory: async () => ({ path: '', parent: null, dirs: [] }),
   createTerminal: async () => ({ id: '', output: '' }),
   sendTerminalInput: () => {},
   resizeTerminal: () => {},
@@ -38,6 +53,12 @@ export const snugget: SnuggetBridge = window.snugget ?? {
   googleSignIn: async () => ({ connected: false, error: 'not available outside Electron' }),
   googleStatus: async () => ({ connected: false }),
   googleSignOut: async () => ({ connected: false }),
+  openNativeApp: async () => {},
+  closeNativeApp: async () => {},
+  onNativeFrame: () => () => {},
+  onNativeMessage: () => () => {},
+  attachDevTools: async () => false,
+  detachDevTools: async () => {},
   webviewPreload: ''
 };
 

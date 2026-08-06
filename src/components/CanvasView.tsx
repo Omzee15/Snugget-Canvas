@@ -185,20 +185,6 @@ export function CanvasView() {
       setVp(vp.x - dx, vp.y - dy, vp.zoom);
     };
 
-    canvasController.current = {
-      zoomAtScreenPoint,
-      zoomAtCenter,
-      setZoomCenter,
-      zoomToFit,
-      focusWindow,
-      jumpToWindow,
-      screenCenterToWorld,
-      panBy
-    };
-
-    const area = areaRef.current;
-    if (!area) return;
-
     const screenToWorld = (sx: number, sy: number) => {
       const rect = areaRect();
       const vp = vpRef.current;
@@ -207,6 +193,22 @@ export function CanvasView() {
         y: (sy - rect.top - vp.y) / vp.zoom
       };
     };
+
+    canvasController.current = {
+      zoomAtScreenPoint,
+      zoomAtCenter,
+      setZoomCenter,
+      zoomToFit,
+      focusWindow,
+      jumpToWindow,
+      screenCenterToWorld,
+      screenToWorld,
+      panBy,
+      getZoom: () => vpRef.current.zoom
+    };
+
+    const area = areaRef.current;
+    if (!area) return;
 
     const screenRectToWorldRect = (a: { x: number; y: number }, b: { x: number; y: number }) => {
       const topLeft = screenToWorld(Math.min(a.x, b.x), Math.min(a.y, b.y));
@@ -220,6 +222,18 @@ export function CanvasView() {
     };
 
     const onWheel = (e: WheelEvent) => {
+      if (!e.metaKey && !e.ctrlKey) {
+        const target = e.target as HTMLElement;
+        const windowEl = target.closest('.app-window') as HTMLElement | null;
+        const id = windowEl?.dataset.windowId;
+        const s = useStore.getState();
+        const isSelected = !!id && (s.selectedWindowId === id || s.selectedWindowIds.includes(id));
+        // A selected window's own content (terminal scrollback, text box, …)
+        // should fully own its scroll, including at its top/bottom edge —
+        // e.g. xterm.js lets a wheel event bubble once there's nothing left
+        // to scroll. Bail out here instead of treating that as a canvas pan.
+        if (isSelected && target.closest('.window-content')) return;
+      }
       e.preventDefault();
       if (e.metaKey || e.ctrlKey) {
         zoomAtScreenPoint(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.008));

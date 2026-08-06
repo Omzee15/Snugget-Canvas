@@ -14,25 +14,57 @@ function ScreenRow({ desk, win, indent }: { desk: Desk; win: WindowNode; indent:
     (s) => s.selectedWindowId === win.id && s.activeDeskId === desk.id
   );
   const group = desk.groups.find((g) => g.id === win.groupId) ?? null;
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const startRename = () => {
+    setDraft(win.title || win.url);
+    setRenaming(true);
+  };
+
+  const commitRename = () => {
+    const name = draft.trim();
+    if (name) {
+      useStore.getState().updateWindow(desk.id, win.id, { title: name, titleOverridden: true });
+    }
+    setRenaming(false);
+  };
 
   return (
     <div
       className={`screen-row${selected ? ' active' : ''}${indent ? ' indent' : ''}`}
       onClick={() => {
-        const s = useStore.getState();
-        s.setActiveDesk(desk.id);
-        s.select(win.id);
-        s.bringToFront(desk.id, win.id);
+        if (renaming) return;
+        useStore.getState().setActiveDesk(desk.id);
+        canvasController.current?.focusWindow(win.id);
       }}
-      onDoubleClick={() => canvasController.current?.focusWindow(win.id)}
-      title={`${win.title || win.url}\nDouble-click to zoom to this screen`}
+      onDoubleClick={() => {
+        if (renaming) return;
+        startRename();
+      }}
+      title={renaming ? undefined : `${win.title || win.url}\nClick to jump · double-click to rename`}
     >
       {win.favicon ? (
         <img className="favicon" src={win.favicon} alt="" draggable={false} />
       ) : (
         <span className="favicon-dot" />
       )}
-      <span className="screen-title">{win.title || win.url}</span>
+      {renaming ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitRename();
+            if (e.key === 'Escape') setRenaming(false);
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="screen-title">{win.title || win.url}</span>
+      )}
       <span
         className={`group-pick${group ? ' has-group' : ''}`}
         title={group ? `Group: ${group.name}` : 'Assign to a group'}
@@ -279,13 +311,21 @@ export function Sidebar() {
         })}
       </div>
 
-      <div className="sidebar-footer">
-        <GoogleConnect />
-        <div><kbd>⇧A</kbd> open menu</div>
-        <div><kbd>V</kbd> move · <kbd>H</kbd> hand</div>
-        <div><kbd>⌘±</kbd> zoom · <kbd>⇧1</kbd> fit</div>
-        <div><kbd>⇧⌫</kbd> close window</div>
-      </div>
+      <SidebarFooter />
     </aside>
+  );
+}
+
+function SidebarFooter() {
+  return (
+    <div className="sidebar-footer">
+      <GoogleConnect />
+      <button
+        className="sidebar-kb-settings"
+        onClick={() => useStore.getState().setKeybindingsOpen(true)}
+      >
+        Keyboard Shortcuts…
+      </button>
+    </div>
   );
 }

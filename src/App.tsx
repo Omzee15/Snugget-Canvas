@@ -1,12 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { openApp, openImage } from './apps';
 import { snugget } from './bridge';
 import { canvasController } from './canvasController';
+import { BookmarksPanel } from './components/BookmarksPanel';
 import { CanvasView } from './components/CanvasView';
 import { CommandPalette } from './components/CommandPalette';
+import { KeybindingsSettings } from './components/KeybindingsSettings';
+import { ShortcutWheel } from './components/ShortcutWheel';
 import { Sidebar } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { Toolbar } from './components/Toolbar';
+import { comboFromEvent, isModifierOnly } from './keybindings';
 import { activeDesk, useStore } from './store';
 
 const isTyping = (el: EventTarget | null) =>
@@ -23,8 +27,10 @@ const deleteSelected = () => {
 export default function App() {
   const hydrated = useStore((s) => s.hydrated);
   const paletteOpen = useStore((s) => s.paletteOpen);
+  const bookmarksOpen = useStore((s) => s.bookmarksOpen);
   const mode = useStore((s) => s.mode);
   const spaceHeld = useStore((s) => s.spaceHeld);
+  const keybindingsOpen = useStore((s) => s.keybindingsOpen);
 
   useEffect(() => {
     snugget.loadState().then((saved) => useStore.getState().hydrate(saved));
@@ -37,8 +43,26 @@ export default function App() {
       if (!s.hydrated) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
-        const { desks, activeDeskId, favorites } = useStore.getState();
-        snugget.saveState({ desks, activeDeskId, favorites });
+        const {
+          desks,
+          activeDeskId,
+          favorites,
+          bookmarks,
+          wheelSlots,
+          lastClaudeDir,
+          recentClaudeDirs,
+          keybindings
+        } = useStore.getState();
+        snugget.saveState({
+          desks,
+          activeDeskId,
+          favorites,
+          bookmarks,
+          wheelSlots,
+          lastClaudeDir,
+          recentClaudeDirs,
+          keybindings
+        });
       }, 400);
     });
     return () => {
@@ -47,12 +71,21 @@ export default function App() {
     };
   }, []);
 
-  // IPC from main: popups from guest apps + zoom/delete hotkeys pressed while a guest has focus
+  // IPC from main: popups from guest apps + zoom/delete/deselect hotkeys
+  // pressed while a guest has focus. This path is a fixed safety net
+  // (main.cjs intercepts literal Cmd+=/-/0, Shift+Backspace/Delete, and
+  // Cmd+Escape before a guest page can swallow them) and doesn't follow
+  // user-rebound keybindings — remapping it would require syncing custom
+  // combos into the main process.
   useEffect(() => {
     snugget.onOpenUrl((url) => openApp(url));
-    snugget.onHotkey(({ key, shift }) => {
+    snugget.onHotkey(({ key, shift, meta }) => {
       if (shift && (key === 'Backspace' || key === 'Delete')) {
         deleteSelected();
+        return;
+      }
+      if (meta && key === 'Escape') {
+        useStore.getState().select(null);
         return;
       }
       const c = canvasController.current;
@@ -63,43 +96,77 @@ export default function App() {
     });
   }, []);
 
+  // Tracked purely for the W shortcut wheel, which needs to know where the
+  // cursor was at the moment of the keypress (keydown events carry no
+  // coordinates). A ref avoids a re-render on every mouse move.
+  const lastMouse = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      lastMouse.current = { x: e.clientX, y: e.clientY };
+    };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const s = useStore.getState();
-      const mod = e.metaKey || e.ctrlKey;
+      if (s.keybindingsOpen || isModifierOnly(e)) return;
+      const combo = comboFromEvent(e);
+      const kb = s.keybindings;
 
-      if (e.shiftKey && e.key.toLowerCase() === 'a') {
+      // Space-to-pan and Escape (close palette/wheel/bookmarks) aren't in the
+      // rebindable registry — they're modal/momentary, not action triggers.
+      if (e.key === 'Escape') {
+        if (s.paletteOpen) s.setPaletteOpen(false);
+        else if (s.bookmarksOpen) s.setBookmarksOpen(false);
+        else if (s.wheelOpen) s.closeWheel();
+        else if (combo === kb.deselect) s.select(null);
+        return;
+      }
+
+      // Cmd+A/Cmd+B double as native select-all/bold in text inputs — only
+      // treat them as app shortcuts when focus isn't in one of those.
+      if (isTyping(e.target)) return;
+
+      if (combo === kb.palette) {
         e.preventDefault();
         s.setPaletteOpen(!s.paletteOpen);
         return;
       }
-      if (e.key === 'Escape') {
-        if (s.paletteOpen) s.setPaletteOpen(false);
-        else s.select(null);
+
+      if (combo === kb.bookmarks) {
+        e.preventDefault();
+        s.setBookmarksOpen(!s.bookmarksOpen);
         return;
       }
-      if (isTyping(e.target) || s.paletteOpen) return;
+
+      if (s.paletteOpen || s.wheelOpen || s.bookmarksOpen) return;
 
       const c = canvasController.current;
-      if (mod && (e.key === '=' || e.key === '+')) {
+      if (combo === kb.shortcutWheel && !e.repeat) {
+        e.preventDefault();
+        s.openWheel({ ...lastMouse.current });
+      } else if (combo === kb.zoomIn) {
         e.preventDefault();
         c?.zoomAtCenter(1.25);
-      } else if (mod && e.key === '-') {
+      } else if (combo === kb.zoomOut) {
         e.preventDefault();
         c?.zoomAtCenter(1 / 1.25);
-      } else if (mod && e.key === '0') {
+      } else if (combo === kb.zoomReset) {
         e.preventDefault();
         c?.setZoomCenter(1);
-      } else if (e.shiftKey && e.key === '!') {
+      } else if (combo === kb.zoomFit) {
+        e.preventDefault();
         c?.zoomToFit();
       } else if (e.code === 'Space' && !e.repeat) {
         e.preventDefault();
         s.setSpaceHeld(true);
-      } else if (!mod && e.key.toLowerCase() === 'v') {
+      } else if (combo === kb.toolSelect) {
         s.setMode('select');
-      } else if (!mod && e.key.toLowerCase() === 'h') {
+      } else if (combo === kb.toolHand) {
         s.setMode('hand');
-      } else if (e.shiftKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+      } else if (combo === kb.closeWindow) {
         e.preventDefault();
         deleteSelected();
       }
@@ -151,6 +218,9 @@ export default function App() {
       </div>
       <StatusBar />
       {paletteOpen && <CommandPalette />}
+      {bookmarksOpen && <BookmarksPanel />}
+      <ShortcutWheel />
+      {keybindingsOpen && <KeybindingsSettings />}
     </div>
   );
 }

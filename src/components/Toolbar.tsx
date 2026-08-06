@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { canvasController } from '../canvasController';
+import { formatCombo } from '../keybindings';
 import { activeDesk, useStore } from '../store';
 import { snugget } from '../bridge';
 import type { AppNotification } from '../types';
@@ -288,6 +289,7 @@ export function Toolbar() {
   const mode = useStore((s) => s.mode);
   const spaceHeld = useStore((s) => s.spaceHeld);
   const zoom = useStore((s) => activeDesk(s)?.viewport.zoom ?? 1);
+  const kb = useStore((s) => s.keybindings);
   const handActive = mode === 'hand' || spaceHeld;
 
   return (
@@ -296,7 +298,7 @@ export function Toolbar() {
       <div className="toolbar">
         <button
           className={!handActive ? 'active' : ''}
-          title="Move / select (V)"
+          title={`Move / select (${formatCombo(kb.toolSelect)})`}
           onClick={() => useStore.getState().setMode('select')}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
@@ -305,7 +307,7 @@ export function Toolbar() {
         </button>
         <button
           className={handActive ? 'active' : ''}
-          title="Hand tool — pan anywhere (H or hold Space)"
+          title={`Hand tool — pan anywhere (${formatCombo(kb.toolHand)} or hold Space)`}
           onClick={() => useStore.getState().setMode('hand')}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
@@ -315,7 +317,7 @@ export function Toolbar() {
         <div className="toolbar-sep" />
         <button
           className="add-btn"
-          title="Open anything (Shift+A)"
+          title={`Open anything (${formatCombo(kb.palette)})`}
           onClick={() => useStore.getState().setPaletteOpen(true)}
         >
           + Open
@@ -327,22 +329,28 @@ export function Toolbar() {
         <NotificationsBell />
         <div className="zoom-controls">
           <button
-            title="Zoom out (⌘−)"
+            title={`Zoom out (${formatCombo(kb.zoomOut)})`}
             onClick={() => canvasController.current?.zoomAtCenter(1 / 1.25)}
           >
             −
           </button>
           <button
             className="zoom-value"
-            title="Reset to 100% (⌘0)"
+            title={`Reset to 100% (${formatCombo(kb.zoomReset)})`}
             onClick={() => canvasController.current?.setZoomCenter(1)}
           >
             {Math.round(zoom * 100)}%
           </button>
-          <button title="Zoom in (⌘+)" onClick={() => canvasController.current?.zoomAtCenter(1.25)}>
+          <button
+            title={`Zoom in (${formatCombo(kb.zoomIn)})`}
+            onClick={() => canvasController.current?.zoomAtCenter(1.25)}
+          >
             +
           </button>
-          <button title="Zoom to fit (⇧1)" onClick={() => canvasController.current?.zoomToFit()}>
+          <button
+            title={`Zoom to fit (${formatCombo(kb.zoomFit)})`}
+            onClick={() => canvasController.current?.zoomToFit()}
+          >
             Fit
           </button>
         </div>

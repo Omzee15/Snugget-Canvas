@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { DEFAULT_KEYBINDINGS, type KeybindingId } from './keybindings';
 import type {
   AppNotification,
   Desk,
@@ -10,6 +11,9 @@ import type {
 } from './types';
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+export const WHEEL_SLOTS = 6;
+const emptyWheel = (): (Favorite | null)[] => Array(WHEEL_SLOTS).fill(null);
 
 export const GROUP_COLORS = [
   '#f97316',
@@ -42,6 +46,15 @@ interface AppState {
   notifications: AppNotification[];
   unreadCount: number;
   favorites: Favorite[];
+  bookmarks: Favorite[];
+  bookmarksOpen: boolean;
+  wheelSlots: (Favorite | null)[];
+  wheelOpen: boolean;
+  wheelOrigin: { x: number; y: number } | null;
+  lastClaudeDir: string;
+  recentClaudeDirs: string[];
+  keybindings: Record<KeybindingId, string>;
+  keybindingsOpen: boolean;
 
   hydrate: (saved: PersistedState | null) => void;
   addDesk: () => void;
@@ -64,10 +77,22 @@ interface AppState {
   setPaletteOpen: (open: boolean) => void;
   addFavorite: (f: Favorite) => void;
   removeFavorite: (url: string) => void;
+  addBookmark: (f: Favorite) => void;
+  removeBookmark: (url: string) => void;
+  setBookmarksOpen: (open: boolean) => void;
+  setWheelSlot: (index: number, fav: Favorite | null) => void;
+  openWheel: (origin: { x: number; y: number }) => void;
+  closeWheel: () => void;
+  setLastClaudeDir: (dir: string) => void;
+  addRecentClaudeDir: (dir: string) => void;
   addNotification: (n: AppNotification) => void;
   markNotificationsSeen: () => void;
   removeNotification: (id: string) => void;
   clearNotifications: () => void;
+  setKeybinding: (id: KeybindingId, combo: string) => void;
+  resetKeybinding: (id: KeybindingId) => void;
+  resetAllKeybindings: () => void;
+  setKeybindingsOpen: (open: boolean) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -82,9 +107,26 @@ export const useStore = create<AppState>((set) => ({
   notifications: [],
   unreadCount: 0,
   favorites: [],
+  bookmarks: [],
+  bookmarksOpen: false,
+  wheelSlots: emptyWheel(),
+  wheelOpen: false,
+  wheelOrigin: null,
+  lastClaudeDir: '',
+  recentClaudeDirs: [],
+  keybindings: { ...DEFAULT_KEYBINDINGS },
+  keybindingsOpen: false,
 
   hydrate: (saved) =>
     set(() => {
+      // Older saves may have no wheelSlots, or a different length than the
+      // current WHEEL_SLOTS constant — normalize to a fixed-length array.
+      const wheelSlots = emptyWheel().map((_, i) => saved?.wheelSlots?.[i] ?? null);
+      const lastClaudeDir = saved?.lastClaudeDir ?? '';
+      const recentClaudeDirs = saved?.recentClaudeDirs?.slice(0, 10) ?? [];
+      // Merge over defaults so a newer app version's added shortcuts get their
+      // default combo even when loading a save from before they existed.
+      const keybindings = { ...DEFAULT_KEYBINDINGS, ...(saved?.keybindings ?? {}) };
       if (saved && saved.desks.length > 0) {
         // Migrate state saved before groups existed
         const desks = saved.desks.map((d) => ({
@@ -106,11 +148,24 @@ export const useStore = create<AppState>((set) => ({
           desks,
           activeDeskId: active,
           favorites: saved.favorites ?? [],
+          bookmarks: saved.bookmarks ?? [],
+          wheelSlots,
+          lastClaudeDir,
+          recentClaudeDirs,
+          keybindings,
           hydrated: true
         };
       }
       const desk = newDesk('Desktop 1');
-      return { desks: [desk], activeDeskId: desk.id, hydrated: true };
+      return {
+        desks: [desk],
+        activeDeskId: desk.id,
+        wheelSlots,
+        lastClaudeDir,
+        recentClaudeDirs,
+        keybindings,
+        hydrated: true
+      };
     }),
 
   addDesk: () =>
@@ -250,6 +305,30 @@ export const useStore = create<AppState>((set) => ({
   removeFavorite: (url) =>
     set((s) => ({ favorites: s.favorites.filter((f) => f.url !== url) })),
 
+  addBookmark: (f) =>
+    set((s) =>
+      s.bookmarks.some((x) => x.url === f.url) ? s : { bookmarks: [...s.bookmarks, f] }
+    ),
+
+  removeBookmark: (url) =>
+    set((s) => ({ bookmarks: s.bookmarks.filter((b) => b.url !== url) })),
+
+  setBookmarksOpen: (open) => set({ bookmarksOpen: open }),
+
+  setWheelSlot: (index, fav) =>
+    set((s) => ({
+      wheelSlots: s.wheelSlots.map((slot, i) => (i === index ? fav : slot))
+    })),
+
+  openWheel: (origin) => set({ wheelOpen: true, wheelOrigin: origin }),
+  closeWheel: () => set({ wheelOpen: false, wheelOrigin: null }),
+
+  setLastClaudeDir: (dir) => set({ lastClaudeDir: dir }),
+  addRecentClaudeDir: (dir) =>
+    set((s) => ({
+      recentClaudeDirs: [dir, ...s.recentClaudeDirs.filter((d) => d !== dir)].slice(0, 10)
+    })),
+
   addNotification: (n) =>
     set((s) => ({
       notifications: [n, ...s.notifications].slice(0, 100),
@@ -271,7 +350,14 @@ export const useStore = create<AppState>((set) => ({
     }),
   setMode: (mode) => set({ mode }),
   setSpaceHeld: (held) => set({ spaceHeld: held }),
-  setPaletteOpen: (open) => set({ paletteOpen: open })
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
+
+  setKeybinding: (id, combo) =>
+    set((s) => ({ keybindings: { ...s.keybindings, [id]: combo } })),
+  resetKeybinding: (id) =>
+    set((s) => ({ keybindings: { ...s.keybindings, [id]: DEFAULT_KEYBINDINGS[id] } })),
+  resetAllKeybindings: () => set({ keybindings: { ...DEFAULT_KEYBINDINGS } }),
+  setKeybindingsOpen: (open) => set({ keybindingsOpen: open })
 }));
 
 export const activeDesk = (s: AppState): Desk =>

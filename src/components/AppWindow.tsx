@@ -1,14 +1,27 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { CHROME_UA, normalizeUrl, openInNativeBrowser, titleForUrl } from '../apps';
+import { CHROME_UA, normalizeUrl, openDevToolsWindow, openInNativeBrowser, titleForUrl } from '../apps';
 import { snugget } from '../bridge';
 import { canvasController } from '../canvasController';
 import { dragListen } from '../drag';
+import { formatCombo } from '../keybindings';
 import { activeDesk, uid, useStore } from '../store';
+import { ClaudeDirPicker } from './ClaudeDirPicker';
+import { DevToolsView } from './DevToolsView';
+import { NativeAppView } from './NativeAppView';
 import { Terminal } from './Terminal';
 import type { WindowNode } from '../types';
 
 const MIN_W = 280;
 const MIN_H = 180;
+
+// Titlebar space is tight — show just the current folder (and its parent for
+// context) rather than the full absolute path.
+function shortCwd(cwd: string | undefined): string | null {
+  if (!cwd) return null;
+  const parts = cwd.split('/').filter(Boolean);
+  if (parts.length === 0) return '/';
+  return parts.length === 1 ? parts[0] : `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+}
 
 // Injected into the guest's main world on dom-ready: replaces the Notification
 // API so guest apps' notifications surface in the canvas bell instead of
@@ -52,7 +65,9 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
   const isTerminal = node.kind === 'terminal';
   const isText = node.kind === 'text';
   const isImage = node.kind === 'image';
-  const isWebview = !isTerminal && !isText && !isImage;
+  const isNative = node.kind === 'native';
+  const isDevtools = node.kind === 'devtools';
+  const isWebview = !isTerminal && !isText && !isImage && !isNative && !isDevtools;
   const selected = useStore(
     (s) =>
       s.activeDeskId === deskId &&
@@ -64,10 +79,24 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
   // persistence), but rewriting the src attribute would reload the app.
   const [loadedUrl, setLoadedUrl] = useState(() => node.url || 'about:blank');
   const [draftUrl, setDraftUrl] = useState(() => node.url);
+  const [copied, setCopied] = useState(false);
   const nodeRef = useRef(node);
   nodeRef.current = node;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+
+  // Deselecting a window (clicking the canvas background, another window,
+  // etc.) doesn't retarget OS/DOM keyboard focus on its own — without this,
+  // whatever was focused inside (a text box, the terminal's hidden textarea,
+  // a webview's guest input) keeps eating keystrokes even though the window
+  // no longer looks selected.
+  useEffect(() => {
+    if (selected) return;
+    const root = rootRef.current;
+    if (root?.contains(document.activeElement)) {
+      (document.activeElement as HTMLElement | null)?.blur();
+    }
+  }, [selected]);
 
   useEffect(() => {
     if (!isBlank) return;
@@ -81,6 +110,7 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
     const s = () => useStore.getState();
     const onTitle = (e: any) => {
       if (isBlank && !nodeRef.current.url) return;
+      if (nodeRef.current.titleOverridden) return;
       s().updateWindow(deskId, node.id, { title: e.title });
     };
     const onFavicon = (e: any) =>
@@ -174,6 +204,34 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
     openInNativeBrowser(normalizeUrl(browserUrl));
   };
 
+  const copyUrl = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!node.url) return;
+    navigator.clipboard.writeText(node.url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  };
+
+  const isFav = useStore((s) => !!node.url && s.favorites.some((f) => f.url === node.url));
+  const toggleFav = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!node.url) return;
+    const s = useStore.getState();
+    if (isFav) s.removeFavorite(node.url);
+    else s.addFavorite({ name: node.title || titleForUrl(node.url), url: node.url });
+  };
+
+  const isBookmarked = useStore((s) => !!node.url && s.bookmarks.some((b) => b.url === node.url));
+  const bookmarksCombo = useStore((s) => s.keybindings.bookmarks);
+  const toggleBookmark = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!node.url) return;
+    const s = useStore.getState();
+    if (isBookmarked) s.removeBookmark(node.url);
+    else s.addBookmark({ name: node.title || titleForUrl(node.url), url: node.url });
+  };
+
   const selectSelf = () => {
     const s = useStore.getState();
     s.select(node.id);
@@ -190,40 +248,65 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
     if (s.mode === 'hand' || s.spaceHeld) return; // let the canvas pan
     e.stopPropagation();
 
-    // Option+drag duplicates the screen: a copy stays at the original spot
-    // while this window is dragged away (its DOM node already exists, so the
-    // drag's direct style mutation keeps working).
-    if (e.altKey) {
-      const src = nodeRef.current;
-      // A cloned terminal must get its own PTY, not the source's session id —
-      // otherwise both xterm UIs end up wired to the same live shell process.
-      s.addWindow(deskId, {
-        ...src,
-        id: uid(),
-        terminalId: src.kind === 'terminal' ? null : src.terminalId
-      });
-    }
-
     // Dragging an already-selected window in a multi-selection should move
     // the whole group — only collapse to single-select if this window isn't
     // part of the current selection.
     const inMultiSelect = s.selectedWindowIds.includes(node.id) && s.selectedWindowIds.length > 1;
-    if (!inMultiSelect) selectSelf();
-    else s.bringToFront(deskId, node.id);
 
-    const desk = activeDesk(useStore.getState());
-    const groupIds = inMultiSelect ? s.selectedWindowIds : [node.id];
-    const groupEls = new Map<string, HTMLElement>();
+    // Option+drag duplicates the window — like Finder's copy-on-drag, the
+    // original stays exactly where it is (so a live terminal session, say,
+    // keeps running completely undisturbed — its React component/DOM node
+    // never unmounts) and the new copy is what follows the cursor. A cloned
+    // terminal starts its own fresh PTY rather than inheriting the live one.
+    let dragId = node.id;
+    if (e.altKey) {
+      const src = nodeRef.current;
+      const cloneId = uid();
+      // Give the clone a genuinely higher z, not src's (tied) one — a tie
+      // only renders on top by coincidence of DOM/array order, and
+      // bringToFront's "already at max, skip" check treats a tied z as
+      // already-on-top, so the original would stop responding to selection
+      // until some other window broke the tie first.
+      const maxZ = Math.max(0, ...activeDesk(s).windows.map((w) => w.z));
+      s.addWindow(deskId, {
+        ...src,
+        id: cloneId,
+        z: maxZ + 1,
+        terminalId: src.kind === 'terminal' ? null : src.terminalId
+      });
+      if (!inMultiSelect) dragId = cloneId;
+    }
+
+    if (!inMultiSelect) {
+      s.select(dragId);
+      s.bringToFront(deskId, dragId);
+    } else {
+      s.bringToFront(deskId, node.id);
+    }
+
+    const groupIds = inMultiSelect ? s.selectedWindowIds : [dragId];
     const groupStart = new Map<string, { x: number; y: number }>();
     const world = rootRef.current?.closest('.world');
-    for (const id of groupIds) {
-      const win = desk.windows.find((w) => w.id === id);
-      if (!win) continue;
-      groupStart.set(id, { x: win.x, y: win.y });
+    {
+      const desk = activeDesk(useStore.getState());
+      for (const id of groupIds) {
+        const win = desk.windows.find((w) => w.id === id);
+        if (win) groupStart.set(id, { x: win.x, y: win.y });
+      }
+    }
+
+    // Resolved lazily (not all up front) — a just-cloned window's DOM node
+    // doesn't exist yet at this exact instant (React hasn't committed the
+    // new window), but will by the time the first real pointermove fires.
+    const groupEls = new Map<string, HTMLElement>();
+    const resolveEl = (id: string): HTMLElement | null => {
+      const cached = groupEls.get(id);
+      if (cached) return cached;
       const el =
         id === node.id ? rootRef.current : (world?.querySelector(`[data-window-id="${id}"]`) as HTMLElement | null);
       if (el) groupEls.set(id, el);
-    }
+      return el;
+    };
 
     const start = { mx: e.clientX, my: e.clientY };
     const finalPos = new Map(groupStart);
@@ -235,7 +318,7 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
         for (const [id, from] of groupStart) {
           const next = { x: from.x + dx, y: from.y + dy };
           finalPos.set(id, next);
-          const el = groupEls.get(id);
+          const el = resolveEl(id);
           if (el) {
             el.style.left = `${next.x}px`;
             el.style.top = `${next.y}px`;
@@ -299,9 +382,20 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
     }
   };
 
+  const openDevTools = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    openDevToolsWindow(node);
+  };
+
   const close = (e: React.MouseEvent) => {
     e.stopPropagation();
-    useStore.getState().removeWindow(deskId, node.id);
+    const s = useStore.getState();
+    const desk = s.desks.find((d) => d.id === deskId);
+    // A devtools window has no page of its own once its target is gone.
+    desk?.windows
+      .filter((win) => win.kind === 'devtools' && win.devtoolsTargetId === node.id)
+      .forEach((win) => s.removeWindow(deskId, win.id));
+    s.removeWindow(deskId, node.id);
   };
 
   return (
@@ -326,87 +420,167 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
         onPointerDown={onTitleBarPointerDown}
         onDoubleClick={() => canvasController.current?.focusWindow(node.id)}
       >
-        {isBlank ? (
-          <div className="blank-url-shell">
-            <input
-              className="blank-url-input"
-              value={draftUrl}
-              onChange={(e) => setDraftUrl(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitBlankUrl();
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              placeholder="Enter a website URL"
-              spellCheck={false}
-            />
+        <div className="titlebar-main">
+          {isTerminal ? (
+            <span className="favicon-dot terminal-dot" />
+          ) : node.favicon ? (
+            <img className="favicon" src={node.favicon} alt="" draggable={false} />
+          ) : (
+            <span className="favicon-dot" />
+          )}
+          <span className="title">{node.title || node.url}</span>
+          {isTerminal && node.cwd && (
+            <span className="title-cwd">{shortCwd(node.cwd)}</span>
+          )}
+          {isWebview && node.url && (
             <button
-              className="blank-url-go"
-              title="Load URL"
-              onClick={(e) => {
-                e.stopPropagation();
-                commitBlankUrl();
-              }}
+              className={`title-fav${isFav ? ' faved' : ''}`}
+              title={isFav ? 'Remove from favourites' : 'Add to favourites'}
+              onClick={toggleFav}
               onPointerDown={(e) => e.stopPropagation()}
             >
-              Go
-            </button>
-          </div>
-        ) : (
-          <>
-            {isTerminal ? (
-              <span className="favicon-dot terminal-dot" />
-            ) : node.favicon ? (
-              <img className="favicon" src={node.favicon} alt="" draggable={false} />
-            ) : (
-              <span className="favicon-dot" />
-            )}
-            <span className="title">{node.title || node.url}</span>
-          </>
-        )}
-        <div className="titlebar-actions">
-          {isWebview && !isBlank && (
-            <button title="Open in browser" onClick={openExternal} onPointerDown={(e) => e.stopPropagation()}>
-              ↗
+              {isFav ? '★' : '☆'}
             </button>
           )}
-          {isWebview && !isBlank && (
-            <div className="nav-pair">
-              <button title="Back" onClick={nav('back')} onPointerDown={(e) => e.stopPropagation()}>
-                ‹
+          {isWebview && node.url && (
+            <button
+              className={`title-bookmark${isBookmarked ? ' bookmarked' : ''}`}
+              title={
+                isBookmarked
+                  ? 'Remove bookmark'
+                  : `Add bookmark (${formatCombo(bookmarksCombo)} to view all)`
+              }
+              onClick={toggleBookmark}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill={isBookmarked ? 'currentColor' : 'none'}
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4-7 4V4.5a1 1 0 0 1 1-1Z" />
+              </svg>
+            </button>
+          )}
+          {isWebview && node.url && (
+            <button
+              className={`title-copy${copied ? ' copied' : ''}`}
+              title={copied ? 'Copied!' : 'Copy URL'}
+              onClick={copyUrl}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {copied ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="12" height="12" rx="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              )}
+            </button>
+          )}
+          <div className="titlebar-actions">
+            {isWebview && !isBlank && (
+              <button title="Open in browser" onClick={openExternal} onPointerDown={(e) => e.stopPropagation()}>
+                ↗
               </button>
+            )}
+            {isWebview && !isBlank && (
+              <div className="nav-pair">
+                <button title="Back" onClick={nav('back')} onPointerDown={(e) => e.stopPropagation()}>
+                  ‹
+                </button>
+                <button
+                  title="Forward"
+                  onClick={nav('forward')}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  ›
+                </button>
+              </div>
+            )}
+            {isWebview && (
               <button
-                title="Forward"
-                onClick={nav('forward')}
+                title="Reload"
+                onClick={nav('reload')}
                 onPointerDown={(e) => e.stopPropagation()}
               >
-                ›
+                ⟳
               </button>
-            </div>
-          )}
-          {isWebview && (
+            )}
+            {isWebview && (
+              <button
+                className="title-devtools"
+                title="Open Developer Tools"
+                onClick={openDevTools}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                {'</>'}
+              </button>
+            )}
             <button
-              title="Reload"
-              onClick={nav('reload')}
+              className="close"
+              title="Close window"
+              onClick={close}
               onPointerDown={(e) => e.stopPropagation()}
             >
-              ⟳
+              ×
             </button>
-          )}
-          <button
-            className="close"
-            title="Close window"
-            onClick={close}
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            ×
-          </button>
+          </div>
         </div>
+        {isWebview && (
+          <div className="titlebar-url">
+            {isBlank ? (
+              <div className="blank-url-shell">
+                <input
+                  className="blank-url-input"
+                  value={draftUrl}
+                  onChange={(e) => setDraftUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitBlankUrl();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="Enter a website URL"
+                  spellCheck={false}
+                />
+                <button
+                  className="blank-url-go"
+                  title="Load URL"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    commitBlankUrl();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  Go
+                </button>
+              </div>
+            ) : (
+              node.url && <span className="url-display">{node.url}</span>
+            )}
+          </div>
+        )}
       </div>
       <div className="window-content">
+        {/* Unselected windows shouldn't forward clicks/scroll into their own
+           content (terminal/webview) — but pointer-events:none on the content
+           lets the click fall through to whatever's painted behind it (e.g. a
+           lower window or the canvas) instead of just selecting this one. An
+           opaque-to-pointer overlay catches the click here first. */}
+        {!selected && <div className="window-guard" onPointerDown={selectSelf} />}
         {isTerminal ? (
           <div className="terminal-shell">
-            <Terminal deskId={deskId} node={node} />
+            {node.pendingCwd ? (
+              <ClaudeDirPicker deskId={deskId} node={node} />
+            ) : (
+              <Terminal deskId={deskId} node={node} />
+            )}
           </div>
         ) : isText ? (
           <textarea
@@ -421,6 +595,10 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
           <div className="image-box">
             {node.imageDataUrl && <img src={node.imageDataUrl} alt="" draggable={false} />}
           </div>
+        ) : isNative ? (
+          <NativeAppView node={node} />
+        ) : isDevtools ? (
+          <DevToolsView deskId={deskId} node={node} />
         ) : (
           <webview
             ref={wvRef as any}

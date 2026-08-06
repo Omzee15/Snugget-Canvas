@@ -1,16 +1,11 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import {
-  normalizeUrl,
-  openApp,
-  openBlankPage,
-  openClaudeTerminal,
-  openNativeTerminal,
-  openTextBox,
-  PRESETS,
-  presetIcon
-} from '../apps';
+import { normalizeUrl, openApp, PRESETS } from '../apps';
+import { BUILTIN_ICON, BUILTIN_ITEMS, builtinUrl } from '../builtinApps';
+import { FallbackIcon } from '../icons';
+import { PRESET_ICONS } from '../presetIcons';
 import { useStore } from '../store';
+import type { Favorite } from '../types';
 
 const domainOf = (url: string) => {
   try {
@@ -21,130 +16,38 @@ const domainOf = (url: string) => {
 };
 
 function AppTile({
-  name,
-  url,
+  fav,
   onOpen,
-  icon,
-  favoritable = true
+  icon
 }: {
-  name: string;
-  url: string;
-  onOpen: (url: string) => void;
+  fav: Favorite;
+  onOpen: (fav: Favorite) => void;
   // Non-website tiles (Terminal, Blank page) have no real favicon — pass an
-  // inline SVG sized/positioned to match presetIcon's <img> instead.
+  // inline SVG sized/positioned to match FallbackIcon instead.
   icon?: ReactNode;
-  favoritable?: boolean;
 }) {
-  const isFav = useStore((s) => favoritable && s.favorites.some((f) => f.url === url));
+  const isFav = useStore((s) => s.favorites.some((f) => f.url === fav.url));
   const toggleFav = (e: React.MouseEvent) => {
     e.stopPropagation();
     const s = useStore.getState();
-    if (isFav) s.removeFavorite(url);
-    else s.addFavorite({ name, url });
+    if (isFav) s.removeFavorite(fav.url);
+    else s.addFavorite(fav);
   };
 
   return (
-    <button className="palette-app" onClick={() => onOpen(url)}>
-      {favoritable && (
-        <span
-          className={`fav-star${isFav ? ' faved' : ''}`}
-          title={isFav ? 'Remove from favourites' : 'Add to favourites'}
-          onClick={toggleFav}
-        >
-          {isFav ? '★' : '☆'}
-        </span>
-      )}
-      {icon ?? <img src={presetIcon(domainOf(url))} alt="" draggable={false} />}
-      <span>{name}</span>
+    <button className="palette-app" onClick={() => onOpen(fav)}>
+      <span
+        className={`fav-star${isFav ? ' faved' : ''}`}
+        title={isFav ? 'Remove from favourites' : 'Add to favourites'}
+        onClick={toggleFav}
+      >
+        {isFav ? '★' : '☆'}
+      </span>
+      {icon ?? PRESET_ICONS[fav.url] ?? <FallbackIcon name={fav.name} />}
+      <span>{fav.name}</span>
     </button>
   );
 }
-
-const NEW_WINDOW_ICON = (
-  <svg
-    className="palette-app-icon"
-    width="28"
-    height="28"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <rect x="4" y="5" width="16" height="14" rx="2.5" />
-    <path d="M8 5v14" />
-    <path d="M4 9h16" />
-  </svg>
-);
-
-const TERMINAL_ICON = (
-  <svg
-    className="palette-app-icon"
-    width="28"
-    height="28"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
-    <path d="m7 10 3 2-3 2" />
-    <path d="M11 14h4" />
-  </svg>
-);
-
-const TEXT_ICON = (
-  <svg
-    className="palette-app-icon"
-    width="28"
-    height="28"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M5 6h14" />
-    <path d="M5 12h14" />
-    <path d="M5 18h8" />
-  </svg>
-);
-
-const CLAUDE_ICON = (
-  <svg
-    className="palette-app-icon"
-    width="28"
-    height="28"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M12 3v4" />
-    <path d="M12 17v4" />
-    <path d="M3 12h4" />
-    <path d="M17 12h4" />
-    <path d="M5.6 5.6l2.8 2.8" />
-    <path d="M15.6 15.6l2.8 2.8" />
-    <path d="M18.4 5.6l-2.8 2.8" />
-    <path d="M8.4 15.6l-2.8 2.8" />
-  </svg>
-);
-
-// Non-website window kinds (terminal, text, blank, Claude) rendered as
-// regular tiles in the Apps grid, same as any website.
-const BUILTIN_ITEMS = [
-  { name: 'New window', icon: NEW_WINDOW_ICON, action: openBlankPage },
-  { name: 'Terminal', icon: TERMINAL_ICON, action: openNativeTerminal },
-  { name: 'Claude Code', icon: CLAUDE_ICON, action: openClaudeTerminal },
-  { name: 'Text box', icon: TEXT_ICON, action: openTextBox }
-];
 
 export function CommandPalette() {
   const [query, setQuery] = useState('');
@@ -153,6 +56,13 @@ export function CommandPalette() {
   const close = () => useStore.getState().setPaletteOpen(false);
   const open = (url: string) => {
     openApp(url);
+    close();
+  };
+  // Dispatches a favorite tile's click: builtins (terminal, text box, …)
+  // replay their action, plain favorites open as a website window.
+  const openFav = (fav: Favorite) => {
+    if (fav.builtin) BUILTIN_ITEMS.find((b) => b.kind === fav.builtin)?.action();
+    else openApp(fav.url);
     close();
   };
 
@@ -169,7 +79,7 @@ export function CommandPalette() {
 
   const submit = () => {
     if (!q) return;
-    if (matchedFavs.length > 0 && !query.includes('.')) open(matchedFavs[0].url);
+    if (matchedFavs.length > 0 && !query.includes('.')) openFav(matchedFavs[0]);
     else if (matchedBuiltins.length > 0 && !query.includes('.')) {
       matchedBuiltins[0].action();
       close();
@@ -214,7 +124,12 @@ export function CommandPalette() {
             <div className="palette-section">Favourites</div>
             <div className="palette-grid">
               {matchedFavs.map((f) => (
-                <AppTile key={f.url} name={f.name} url={f.url} onOpen={open} />
+                <AppTile
+                  key={f.url}
+                  fav={f}
+                  icon={f.builtin ? BUILTIN_ICON[f.builtin] : undefined}
+                  onOpen={openFav}
+                />
               ))}
             </div>
           </>
@@ -225,10 +140,8 @@ export function CommandPalette() {
           {matchedBuiltins.map((item) => (
             <AppTile
               key={item.name}
-              name={item.name}
-              url={item.name}
+              fav={{ name: item.name, url: builtinUrl(item.kind), builtin: item.kind }}
               icon={item.icon}
-              favoritable={false}
               onOpen={() => {
                 item.action();
                 close();
@@ -236,7 +149,7 @@ export function CommandPalette() {
             />
           ))}
           {matchedPresets.map((p) => (
-            <AppTile key={p.url} name={p.name} url={p.url} onOpen={open} />
+            <AppTile key={p.url} fav={{ name: p.name, url: p.url }} onOpen={(f) => open(f.url)} />
           ))}
         </div>
       </div>
