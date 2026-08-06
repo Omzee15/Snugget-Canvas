@@ -344,48 +344,43 @@ ipcMain.handle('native:close', (_event, windowId) => {
 // Docks DevTools for one <webview> (the inspected page) into another
 // <webview> (a plain window-node on the canvas) instead of Electron's default
 // separate OS window, so it behaves like any other draggable canvas window.
-ipcMain.handle('devtools:attach', (_event, { targetId, hostId }) => {
+ipcMain.handle('devtools:attach', async (_event, { targetId, hostId }) => {
   const target = webContents.fromId(targetId);
   const host = webContents.fromId(hostId);
-  console.log(
-    '[devtools:attach]',
-    'targetId=', targetId, 'target=', target && { type: target.getType(), url: target.getURL() },
-    'hostId=', hostId, 'host=', host && { type: host.getType(), url: host.getURL() }
-  );
   if (!target || !host || target.isDestroyed() || host.isDestroyed()) return false;
 
-  target.once('devtools-opened', () => console.log('[devtools:attach] event: devtools-opened fired'));
-  target.once('devtools-closed', () => console.log('[devtools:attach] event: devtools-closed fired'));
-  target.once('devtools-focused', () => console.log('[devtools:attach] event: devtools-focused fired'));
-
   // A prior closeDevTools()-less state (e.g. right-click > Inspect Element
-  // was used on this same webview earlier) can leave an internal devtools
-  // frontend bound, which setDevToolsWebContents may not silently replace —
-  // clear it first so this call starts from a known-empty state.
+  // used on this same webview earlier, or a previous devtools canvas tile
+  // for it that got torn down) can leave an internal devtools frontend
+  // bound, which setDevToolsWebContents may not silently replace — clear it
+  // first so this call starts from a known-empty state, and wait for the
+  // close to actually land before re-opening against the new host.
   if (target.isDevToolsOpened()) {
-    console.log('[devtools:attach] target already had devtools open — closing first');
-    target.closeDevTools();
+    await new Promise((resolve) => {
+      target.once('devtools-closed', resolve);
+      target.closeDevTools();
+      setTimeout(resolve, 1000); // backstop if the event never fires
+    });
   }
+  if (target.isDestroyed() || host.isDestroyed()) return false;
 
-  try {
-    target.setDevToolsWebContents(host);
-    console.log('[devtools:attach] setDevToolsWebContents OK');
-  } catch (err) {
-    console.log('[devtools:attach] setDevToolsWebContents THREW:', err);
-    return false;
-  }
-  try {
-    target.openDevTools();
-    console.log('[devtools:attach] openDevTools OK');
-  } catch (err) {
-    console.log('[devtools:attach] openDevTools THREW:', err);
-    return false;
-  }
-  console.log('[devtools:attach] isDevToolsOpened=', target.isDevToolsOpened());
-  setTimeout(() => {
-    console.log('[devtools:attach] isDevToolsOpened (after 500ms)=', target.isDevToolsOpened());
-  }, 500);
-  return true;
+  // openDevTools() is synchronous-looking but the actual attach/open
+  // completes asynchronously — isDevToolsOpened() checked immediately after
+  // is unreliable. devtools-opened is the authoritative signal.
+  const opened = new Promise((resolve) => {
+    target.once('devtools-opened', () => resolve(true));
+    setTimeout(() => resolve(target.isDevToolsOpened()), 3000);
+  });
+  target.setDevToolsWebContents(host);
+  // For a <webview> target, openDevTools() defaults its internal mode to
+  // 'detach' unless told otherwise (see Electron's WebContents.openDevTools
+  // doc) — that default-detach behavior appears to sidestep our custom host
+  // entirely. Passing an explicit empty mode is documented to force using
+  // the last-used dock state instead of that webview-specific default.
+  target.openDevTools({ mode: '' });
+  const ok = await opened;
+  console.log('[devtools:attach]', target.getURL(), '-> opened:', ok);
+  return ok;
 });
 
 ipcMain.handle('devtools:detach', (_event, { targetId }) => {

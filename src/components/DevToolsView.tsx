@@ -111,8 +111,12 @@ export function DevToolsView({ node }: Props) {
     <div className="devtools-view">
       {/* about:blank is this webview's default document, not a navigation we
           trigger — a webview with no src at all never attaches a guest
-          process, so getWebContentsId() would throw forever. */}
-      <webview ref={hostRef as any} src="about:blank" partition="persist:apps" />
+          process, so getWebContentsId() would throw forever. No partition:
+          this host has nothing to do with the app's session state, and
+          sharing the "persist:apps" partition (used by real content
+          webviews) with the devtools frontend was suspected to interfere
+          with the internal devtools:// protocol handling. */}
+      <webview ref={hostRef as any} src="about:blank" />
       {status !== 'ready' && (
         <div className={`devtools-status${status === 'error' ? ' error' : ''}`} title={errorDetail}>
           {status === 'connecting' ? 'Attaching DevTools…' : `Couldn't attach DevTools — ${errorDetail}`}
