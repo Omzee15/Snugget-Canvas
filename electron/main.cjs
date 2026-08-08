@@ -1,4 +1,8 @@
-const { app, BrowserWindow, ipcMain, shell, Menu, webContents, clipboard, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, clipboard, session } = require('electron');
+// In dev (electron .), Electron shows its own binary's name ("Electron") in
+// the macOS menu bar/dock/system dialogs unless overridden — must be set
+// before app.whenReady() to take effect everywhere it's used.
+app.setName('Snugget');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
@@ -8,6 +12,13 @@ const nativeMirror = require('./native-mirror.cjs');
 
 let mainWindow = null;
 const terminalSessions = new Map();
+// The exact WebContents reference Electron hands us at guest creation (see
+// web-contents-created below), keyed by id — used instead of re-resolving
+// via webContents.fromId() for setDevToolsWebContents, since that appears
+// not to reliably bind to the same internal guest state as this reference
+// does (this is the same object contents.inspectElement() successfully uses
+// for the right-click "Inspect Element" path).
+const webviewContentsById = new Map();
 
 function sendTerminalData(id, chunk) {
   if (mainWindow && chunk) {
@@ -139,6 +150,9 @@ function isGoogleAccountsUrl(url) {
 
 app.on('web-contents-created', (_event, contents) => {
   if (contents.getType() !== 'webview') return;
+
+  webviewContentsById.set(contents.id, contents);
+  contents.once('destroyed', () => webviewContentsById.delete(contents.id));
 
   // target=_blank / window.open inside a canvas window becomes a new canvas
   // window — except a Google sign-in popup, which goes to the real browser.
@@ -341,52 +355,65 @@ ipcMain.handle('native:close', (_event, windowId) => {
   nativeMirror.close(windowId);
 });
 
-// Docks DevTools for one <webview> (the inspected page) into another
-// <webview> (a plain window-node on the canvas) instead of Electron's default
-// separate OS window, so it behaves like any other draggable canvas window.
-ipcMain.handle('devtools:attach', async (_event, { targetId, hostId }) => {
-  const target = webContents.fromId(targetId);
-  const host = webContents.fromId(hostId);
-  if (!target || !host || target.isDestroyed() || host.isDestroyed()) return false;
+// A custom, in-canvas inspector (DevToolsView.tsx) driven by the Chrome
+// DevTools Protocol directly via contents.debugger, rather than Electron's
+// setDevToolsWebContents — which never actually renders into a <webview>
+// host despite reporting success (confirmed across two Electron majors and
+// a real-OS-window overlay attempt; see git history on this block). CDP
+// messages are forwarded to the renderer verbatim; the renderer owns all UI.
+const debuggerSessions = new Map(); // nodeId -> WebContents
 
-  // A prior closeDevTools()-less state (e.g. right-click > Inspect Element
-  // used on this same webview earlier, or a previous devtools canvas tile
-  // for it that got torn down) can leave an internal devtools frontend
-  // bound, which setDevToolsWebContents may not silently replace — clear it
-  // first so this call starts from a known-empty state, and wait for the
-  // close to actually land before re-opening against the new host.
-  if (target.isDevToolsOpened()) {
-    await new Promise((resolve) => {
-      target.once('devtools-closed', resolve);
-      target.closeDevTools();
-      setTimeout(resolve, 1000); // backstop if the event never fires
-    });
+ipcMain.handle('debugger:attach', (_event, { nodeId, targetId }) => {
+  const target = webviewContentsById.get(targetId);
+  if (!target || target.isDestroyed()) return false;
+
+  const existing = debuggerSessions.get(nodeId);
+  if (existing && !existing.isDestroyed() && existing.debugger.isAttached()) return true;
+
+  try {
+    if (!target.debugger.isAttached()) target.debugger.attach();
+  } catch (err) {
+    console.error('[debugger:attach] failed:', err);
+    return false;
   }
-  if (target.isDestroyed() || host.isDestroyed()) return false;
 
-  // openDevTools() is synchronous-looking but the actual attach/open
-  // completes asynchronously — isDevToolsOpened() checked immediately after
-  // is unreliable. devtools-opened is the authoritative signal.
-  const opened = new Promise((resolve) => {
-    target.once('devtools-opened', () => resolve(true));
-    setTimeout(() => resolve(target.isDevToolsOpened()), 3000);
+  const forward = (_e, method, params) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('debugger:event', { nodeId, method, params });
+    }
+  };
+  target.debugger.on('message', forward);
+  target.debugger.once('detach', (_e, reason) => {
+    debuggerSessions.delete(nodeId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('debugger:event', { nodeId, method: '__detached', params: { reason } });
+    }
   });
-  target.setDevToolsWebContents(host);
-  // For a <webview> target, openDevTools() defaults its internal mode to
-  // 'detach' unless told otherwise (see Electron's WebContents.openDevTools
-  // doc) — that default-detach behavior appears to sidestep our custom host
-  // entirely. Passing an explicit empty mode is documented to force using
-  // the last-used dock state instead of that webview-specific default.
-  target.openDevTools({ mode: '' });
-  const ok = await opened;
-  console.log('[devtools:attach]', target.getURL(), '-> opened:', ok);
-  return ok;
+  target.once('destroyed', () => {
+    debuggerSessions.delete(nodeId);
+  });
+
+  debuggerSessions.set(nodeId, target);
+  return true;
 });
 
-ipcMain.handle('devtools:detach', (_event, { targetId }) => {
-  const target = webContents.fromId(targetId);
+ipcMain.handle('debugger:sendCommand', async (_event, { nodeId, method, params }) => {
+  const target = debuggerSessions.get(nodeId);
+  if (!target || target.isDestroyed() || !target.debugger.isAttached()) {
+    throw new Error('debugger not attached');
+  }
+  return target.debugger.sendCommand(method, params);
+});
+
+ipcMain.handle('debugger:detach', (_event, { nodeId }) => {
+  const target = debuggerSessions.get(nodeId);
+  debuggerSessions.delete(nodeId);
   if (!target || target.isDestroyed()) return;
-  target.closeDevTools();
+  try {
+    if (target.debugger.isAttached()) target.debugger.detach();
+  } catch {
+    /* already detached */
+  }
 });
 
 ipcMain.on('state:save', (_event, state) => {
@@ -409,4 +436,12 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   nativeMirror.closeAll();
+  for (const target of debuggerSessions.values()) {
+    try {
+      if (!target.isDestroyed() && target.debugger.isAttached()) target.debugger.detach();
+    } catch {
+      /* already gone */
+    }
+  }
+  debuggerSessions.clear();
 });

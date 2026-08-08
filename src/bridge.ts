@@ -1,4 +1,5 @@
 import type {
+  DebuggerEventPayload,
   DirListing,
   MemoryInfo,
   NativeAppKind,
@@ -28,8 +29,10 @@ interface SnuggetBridge {
   closeNativeApp: (windowId: string) => Promise<void>;
   onNativeFrame: (cb: (payload: NativeFramePayload) => void) => () => void;
   onNativeMessage: (cb: (payload: NativeMessagePayload) => void) => () => void;
-  attachDevTools: (targetId: number, hostId: number) => Promise<boolean>;
-  detachDevTools: (targetId: number) => Promise<void>;
+  debuggerAttach: (nodeId: string, targetId: number) => Promise<boolean>;
+  debuggerSendCommand: (nodeId: string, method: string, params?: unknown) => Promise<any>;
+  debuggerDetach: (nodeId: string) => Promise<void>;
+  onDebuggerEvent: (cb: (payload: DebuggerEventPayload) => void) => () => void;
   webviewPreload: string;
 }
 
@@ -57,8 +60,12 @@ export const snugget: SnuggetBridge = window.snugget ?? {
   closeNativeApp: async () => {},
   onNativeFrame: () => () => {},
   onNativeMessage: () => () => {},
-  attachDevTools: async () => false,
-  detachDevTools: async () => {},
+  debuggerAttach: async () => false,
+  debuggerSendCommand: async () => {
+    throw new Error('not available outside Electron');
+  },
+  debuggerDetach: async () => {},
+  onDebuggerEvent: () => () => {},
   webviewPreload: ''
 };
 

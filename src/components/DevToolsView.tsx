@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { snugget } from '../bridge';
+import { CdpSession } from '../cdp';
+import { ConsolePanel } from './inspector/ConsolePanel';
+import { ElementsPanel } from './inspector/ElementsPanel';
+import { NetworkPanel } from './inspector/NetworkPanel';
 import type { WindowNode } from '../types';
 
 interface Props {
@@ -7,10 +10,6 @@ interface Props {
   node: WindowNode;
 }
 
-// Waits for the inspected window's <webview> to exist in the DOM and have a
-// live guest attached (getWebContentsId() throws before then) — it may not
-// have mounted yet the instant this devtools window appears (e.g. on state
-// restore, sibling windows mount in array order).
 function findTargetWebview(targetId: string): any {
   const el = document.querySelector(`[data-window-id="${targetId}"] webview`) as any;
   if (!el) return null;
@@ -22,22 +21,31 @@ function findTargetWebview(targetId: string): any {
   }
 }
 
-// Docks Chromium's DevTools UI into this window instead of the separate OS
-// window Electron opens by default — see main.cjs's devtools:attach, which
-// calls the inspected webview's setDevToolsWebContents(thisWebview).
+type Tab = 'elements' | 'console' | 'network';
+
+// A custom, in-canvas inspector — real Elements/Console/Network panels
+// rendered as plain React DOM inside the tile, driven by the Chrome DevTools
+// Protocol (contents.debugger in main.cjs) rather than Electron's real
+// DevTools UI. setDevToolsWebContents into a <webview> never actually
+// rendered anything (confirmed dead end across two Electron majors and a
+// native-window-overlay attempt — see git history); CDP directly is the only
+// path that's both fully working and genuinely embedded as canvas content.
 export function DevToolsView({ node }: Props) {
-  const hostRef = useRef<HTMLElement | null>(null);
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [errorDetail, setErrorDetail] = useState('');
+  const [tab, setTab] = useState<Tab>('console');
+  const sessionRef = useRef<CdpSession | null>(null);
+  const [session, setSession] = useState<CdpSession | null>(null);
 
   useEffect(() => {
     const targetId = node.devtoolsTargetId;
-    const host = hostRef.current as any;
-    if (!targetId || !host) return;
+    const nodeId = node.id;
+    if (!targetId) return;
 
     let disposed = false;
-    let attachedTargetWebContentsId: number | null = null;
-    let hostAttached = false;
+    let started = false;
+    const cdp = new CdpSession(nodeId);
+    sessionRef.current = cdp;
 
     const fail = (reason: string) => {
       if (disposed) return;
@@ -46,15 +54,8 @@ export function DevToolsView({ node }: Props) {
       setStatus('error');
     };
 
-    const tryAttach = () => {
-      if (disposed || attachedTargetWebContentsId !== null) return;
-      let hostId: number;
-      try {
-        hostId = host.getWebContentsId();
-        hostAttached = true;
-      } catch {
-        return; // host webview hasn't attached its own guest yet
-      }
+    const tryStart = () => {
+      if (disposed || started) return;
       const target = findTargetWebview(targetId);
       if (!target) return; // inspected window's webview not in the DOM (yet)
       let targetContentsId: number;
@@ -63,63 +64,67 @@ export function DevToolsView({ node }: Props) {
       } catch {
         return; // inspected webview exists but hasn't attached yet
       }
-      attachedTargetWebContentsId = targetContentsId;
-      snugget
-        .attachDevTools(targetContentsId, hostId)
+      started = true;
+      cdp
+        .attach(targetContentsId)
         .then((ok) => {
           if (disposed) return;
-          if (ok) setStatus('ready');
-          else fail('main process returned false from devtools:attach (target/host destroyed?)');
+          if (ok) {
+            setSession(cdp);
+            setStatus('ready');
+          } else {
+            fail('main process could not attach a debugger session to that window');
+          }
         })
-        .catch((err) => fail(`devtools:attach threw: ${err?.message ?? err}`));
+        .catch((err) => fail(`debugger attach threw: ${err?.message ?? err}`));
     };
 
-    const onHostReady = () => tryAttach();
-    host.addEventListener('did-attach', onHostReady);
-    host.addEventListener('dom-ready', onHostReady);
-    tryAttach();
-
-    // The target's own <webview> may still be mounting (or its guest still
-    // navigating to its first page) — poll briefly rather than requiring
-    // exact mount ordering between sibling windows.
-    const poll = setInterval(tryAttach, 200);
+    tryStart();
+    const poll = setInterval(tryStart, 200);
     const giveUp = setTimeout(() => {
       clearInterval(poll);
-      if (attachedTargetWebContentsId === null) {
-        fail(
-          hostAttached
-            ? `timed out waiting for the inspected window's webview to attach (target id ${targetId})`
-            : "timed out waiting for this DevTools panel's own webview to attach"
-        );
-      }
+      if (!started) fail(`timed out waiting for the inspected window's webview (target id ${targetId})`);
     }, 8000);
+
+    cdp.on('__detached', (params) => {
+      if (disposed) return;
+      fail(`debugger session ended (${params?.reason ?? 'unknown reason'}) — reopen this tile to reattach`);
+    });
 
     return () => {
       disposed = true;
       clearInterval(poll);
       clearTimeout(giveUp);
-      host.removeEventListener('did-attach', onHostReady);
-      host.removeEventListener('dom-ready', onHostReady);
-      if (attachedTargetWebContentsId !== null) {
-        snugget.detachDevTools(attachedTargetWebContentsId).catch(() => {});
-      }
+      cdp.dispose();
+      sessionRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node.id, node.devtoolsTargetId]);
 
   return (
     <div className="devtools-view">
-      {/* about:blank is this webview's default document, not a navigation we
-          trigger — a webview with no src at all never attaches a guest
-          process, so getWebContentsId() would throw forever. No partition:
-          this host has nothing to do with the app's session state, and
-          sharing the "persist:apps" partition (used by real content
-          webviews) with the devtools frontend was suspected to interfere
-          with the internal devtools:// protocol handling. */}
-      <webview ref={hostRef as any} src="about:blank" />
-      {status !== 'ready' && (
+      {status === 'ready' && session ? (
+        <>
+          <div className="insp-tabs">
+            <button className={tab === 'elements' ? 'active' : ''} onClick={() => setTab('elements')}>
+              Elements
+            </button>
+            <button className={tab === 'console' ? 'active' : ''} onClick={() => setTab('console')}>
+              Console
+            </button>
+            <button className={tab === 'network' ? 'active' : ''} onClick={() => setTab('network')}>
+              Network
+            </button>
+          </div>
+          <div className="insp-body">
+            {tab === 'elements' && <ElementsPanel session={session} />}
+            {tab === 'console' && <ConsolePanel session={session} />}
+            {tab === 'network' && <NetworkPanel session={session} />}
+          </div>
+        </>
+      ) : (
         <div className={`devtools-status${status === 'error' ? ' error' : ''}`} title={errorDetail}>
-          {status === 'connecting' ? 'Attaching DevTools…' : `Couldn't attach DevTools — ${errorDetail}`}
+          {status === 'connecting' ? 'Attaching inspector…' : `Couldn't attach — ${errorDetail}`}
         </div>
       )}
     </div>

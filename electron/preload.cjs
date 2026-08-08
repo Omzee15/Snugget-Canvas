@@ -43,7 +43,14 @@ contextBridge.exposeInMainWorld('snugget', {
     ipcRenderer.on('native:message', listener);
     return () => ipcRenderer.removeListener('native:message', listener);
   },
-  attachDevTools: (targetId, hostId) => ipcRenderer.invoke('devtools:attach', { targetId, hostId }),
-  detachDevTools: (targetId) => ipcRenderer.invoke('devtools:detach', { targetId }),
+  debuggerAttach: (nodeId, targetId) => ipcRenderer.invoke('debugger:attach', { nodeId, targetId }),
+  debuggerSendCommand: (nodeId, method, params) =>
+    ipcRenderer.invoke('debugger:sendCommand', { nodeId, method, params }),
+  debuggerDetach: (nodeId) => ipcRenderer.invoke('debugger:detach', { nodeId }),
+  onDebuggerEvent: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('debugger:event', listener);
+    return () => ipcRenderer.removeListener('debugger:event', listener);
+  },
   webviewPreload
 });

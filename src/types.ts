@@ -149,6 +149,14 @@ export interface NativeMessagePayload {
   scale?: number;
 }
 
+// A raw Chrome DevTools Protocol notification, forwarded from a target
+// WebContents' contents.debugger — see DevToolsView.tsx / cdp.ts.
+export interface DebuggerEventPayload {
+  nodeId: string;
+  method: string;
+  params: any;
+}
+
 declare global {
   interface Window {
     snugget: {
@@ -172,8 +180,10 @@ declare global {
       closeNativeApp: (windowId: string) => Promise<void>;
       onNativeFrame: (cb: (payload: NativeFramePayload) => void) => () => void;
       onNativeMessage: (cb: (payload: NativeMessagePayload) => void) => () => void;
-      attachDevTools: (targetId: number, hostId: number) => Promise<boolean>;
-      detachDevTools: (targetId: number) => Promise<void>;
+      debuggerAttach: (nodeId: string, targetId: number) => Promise<boolean>;
+      debuggerSendCommand: (nodeId: string, method: string, params?: unknown) => Promise<any>;
+      debuggerDetach: (nodeId: string) => Promise<void>;
+      onDebuggerEvent: (cb: (payload: DebuggerEventPayload) => void) => () => void;
       webviewPreload: string;
     };
   }
