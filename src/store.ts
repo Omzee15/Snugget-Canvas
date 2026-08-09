@@ -12,6 +12,8 @@ import type {
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
+export const DEFAULT_CANVAS_BASE_COLOR = '#17181b';
+
 export const WHEEL_SLOTS = 6;
 const emptyWheel = (): (Favorite | null)[] => Array(WHEEL_SLOTS).fill(null);
 
@@ -45,6 +47,7 @@ interface AppState {
   hydrated: boolean;
   notifications: AppNotification[];
   unreadCount: number;
+  notificationsPanelOpen: boolean;
   favorites: Favorite[];
   bookmarks: Favorite[];
   bookmarksOpen: boolean;
@@ -55,6 +58,9 @@ interface AppState {
   recentClaudeDirs: string[];
   keybindings: Record<KeybindingId, string>;
   keybindingsOpen: boolean;
+  canvasBaseColor: string;
+  canvasGridEnabled: boolean;
+  appearanceOpen: boolean;
 
   hydrate: (saved: PersistedState | null) => void;
   addDesk: () => void;
@@ -62,14 +68,15 @@ interface AppState {
   renameDesk: (id: string, name: string) => void;
   setActiveDesk: (id: string) => void;
   setViewport: (deskId: string, viewport: Viewport) => void;
-  addWindow: (deskId: string, node: WindowNode) => void;
+  addWindow: (deskId: string, node: Omit<WindowNode, 'sidebarOrder'>) => void;
   updateWindow: (deskId: string, id: string, patch: Partial<WindowNode>) => void;
   removeWindow: (deskId: string, id: string) => void;
   bringToFront: (deskId: string, id: string) => void;
-  addGroup: (deskId: string) => void;
   renameGroup: (deskId: string, groupId: string, name: string) => void;
   removeGroup: (deskId: string, groupId: string) => void;
   assignGroup: (deskId: string, windowId: string, groupId: string | null) => void;
+  groupSelectedWindows: (deskId: string, windowIds: string[]) => void;
+  moveSidebarOrder: (deskId: string, windowId: string, direction: 'up' | 'down') => void;
   select: (id: string | null) => void;
   selectMany: (ids: string[]) => void;
   setMode: (mode: ToolMode) => void;
@@ -87,12 +94,16 @@ interface AppState {
   addRecentClaudeDir: (dir: string) => void;
   addNotification: (n: AppNotification) => void;
   markNotificationsSeen: () => void;
+  setNotificationsPanelOpen: (open: boolean) => void;
   removeNotification: (id: string) => void;
   clearNotifications: () => void;
   setKeybinding: (id: KeybindingId, combo: string) => void;
   resetKeybinding: (id: KeybindingId) => void;
   resetAllKeybindings: () => void;
   setKeybindingsOpen: (open: boolean) => void;
+  setCanvasBaseColor: (color: string) => void;
+  setCanvasGridEnabled: (enabled: boolean) => void;
+  setAppearanceOpen: (open: boolean) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -106,6 +117,7 @@ export const useStore = create<AppState>((set) => ({
   hydrated: false,
   notifications: [],
   unreadCount: 0,
+  notificationsPanelOpen: false,
   favorites: [],
   bookmarks: [],
   bookmarksOpen: false,
@@ -116,6 +128,9 @@ export const useStore = create<AppState>((set) => ({
   recentClaudeDirs: [],
   keybindings: { ...DEFAULT_KEYBINDINGS },
   keybindingsOpen: false,
+  canvasBaseColor: DEFAULT_CANVAS_BASE_COLOR,
+  canvasGridEnabled: true,
+  appearanceOpen: false,
 
   hydrate: (saved) =>
     set(() => {
@@ -127,18 +142,23 @@ export const useStore = create<AppState>((set) => ({
       // Merge over defaults so a newer app version's added shortcuts get their
       // default combo even when loading a save from before they existed.
       const keybindings = { ...DEFAULT_KEYBINDINGS, ...(saved?.keybindings ?? {}) };
+      const canvasBaseColor = saved?.canvasBaseColor ?? DEFAULT_CANVAS_BASE_COLOR;
+      const canvasGridEnabled = saved?.canvasGridEnabled ?? true;
       if (saved && saved.desks.length > 0) {
-        // Migrate state saved before groups existed
+        // Migrate state saved before groups / sidebarOrder existed
         const desks = saved.desks.map((d) => ({
           ...d,
           groups: d.groups ?? [],
-          windows: d.windows.map((w) => ({
+          windows: d.windows.map((w, i) => ({
             ...w,
             kind: w.kind ?? 'web',
             groupId: w.groupId ?? null,
             // terminalId points at a shell process in the previous Electron
             // process's memory — it's always dead by the time state reloads.
-            terminalId: w.kind === 'terminal' ? undefined : w.terminalId
+            terminalId: w.kind === 'terminal' ? undefined : w.terminalId,
+            // Older saves have no sidebarOrder — the array's own order is the
+            // closest thing to a prior sidebar order, so seed from index.
+            sidebarOrder: w.sidebarOrder ?? i
           }))
         }));
         const active = desks.some((d) => d.id === saved.activeDeskId)
@@ -153,6 +173,8 @@ export const useStore = create<AppState>((set) => ({
           lastClaudeDir,
           recentClaudeDirs,
           keybindings,
+          canvasBaseColor,
+          canvasGridEnabled,
           hydrated: true
         };
       }
@@ -164,6 +186,8 @@ export const useStore = create<AppState>((set) => ({
         lastClaudeDir,
         recentClaudeDirs,
         keybindings,
+        canvasBaseColor,
+        canvasGridEnabled,
         hydrated: true
       };
     }),
@@ -201,9 +225,11 @@ export const useStore = create<AppState>((set) => ({
 
   addWindow: (deskId, node) =>
     set((s) => ({
-      desks: s.desks.map((d) =>
-        d.id === deskId ? { ...d, windows: [...d.windows, node] } : d
-      ),
+      desks: s.desks.map((d) => {
+        if (d.id !== deskId) return d;
+        const sidebarOrder = Math.max(0, ...d.windows.map((w) => w.sidebarOrder)) + 1;
+        return { ...d, windows: [...d.windows, { ...node, sidebarOrder }] };
+      }),
       selectedWindowId: node.id,
       selectedWindowIds: [node.id]
     })),
@@ -240,25 +266,6 @@ export const useStore = create<AppState>((set) => ({
       })
     })),
 
-  addGroup: (deskId) =>
-    set((s) => ({
-      desks: s.desks.map((d) =>
-        d.id === deskId
-          ? {
-              ...d,
-              groups: [
-                ...d.groups,
-                {
-                  id: uid(),
-                  name: `Group ${d.groups.length + 1}`,
-                  color: GROUP_COLORS[d.groups.length % GROUP_COLORS.length]
-                }
-              ]
-            }
-          : d
-      )
-    })),
-
   renameGroup: (deskId, groupId, name) =>
     set((s) => ({
       desks: s.desks.map((d) =>
@@ -283,16 +290,102 @@ export const useStore = create<AppState>((set) => ({
       )
     })),
 
+  // Also renormalizes sidebarOrder so the moved window's contiguous-run
+  // position (see moveSidebarOrder) matches its new groupId immediately,
+  // rather than only self-correcting the next time it's nudged up/down.
   assignGroup: (deskId, windowId, groupId) =>
     set((s) => ({
-      desks: s.desks.map((d) =>
-        d.id === deskId
-          ? {
-              ...d,
-              windows: d.windows.map((w) => (w.id === windowId ? { ...w, groupId } : w))
+      desks: s.desks.map((d) => {
+        if (d.id !== deskId) return d;
+        const sorted = [...d.windows].sort((a, b) => a.sidebarOrder - b.sidebarOrder);
+        const withoutMoved = sorted.filter((w) => w.id !== windowId);
+        // Last existing member of the destination run (same groupId), or -1
+        // if it's the first member / joining the ungrouped run.
+        let insertAfter = -1;
+        withoutMoved.forEach((w, i) => {
+          if (w.groupId === groupId) insertAfter = i;
+        });
+        const reordered = [
+          ...withoutMoved.slice(0, insertAfter + 1),
+          sorted.find((w) => w.id === windowId)!,
+          ...withoutMoved.slice(insertAfter + 1)
+        ];
+        const orderById = new Map(reordered.map((w, i) => [w.id, i]));
+        return {
+          ...d,
+          windows: d.windows.map((w) =>
+            w.id === windowId
+              ? { ...w, groupId, sidebarOrder: orderById.get(w.id)! }
+              : { ...w, sidebarOrder: orderById.get(w.id)! }
+          )
+        };
+      })
+    })),
+
+  // Creates a new group from an in-canvas multi-selection (see the
+  // createGroup keybinding in App.tsx) — assigns the group and also
+  // collapses the selected windows' sidebarOrder into one contiguous run
+  // (inserted at the earliest selected window's position) so the sidebar
+  // immediately shows them together as the new group's block, matching what
+  // assigning a group via the sidebar's own dropdown already implies.
+  groupSelectedWindows: (deskId, windowIds) =>
+    set((s) => ({
+      desks: s.desks.map((d) => {
+        if (d.id !== deskId || windowIds.length < 2) return d;
+        const idSet = new Set(windowIds);
+        const groupId = uid();
+        const newGroup = {
+          id: groupId,
+          name: `Group ${d.groups.length + 1}`,
+          color: GROUP_COLORS[d.groups.length % GROUP_COLORS.length]
+        };
+        const sorted = [...d.windows].sort((a, b) => a.sidebarOrder - b.sidebarOrder);
+        const insertAt = sorted.findIndex((w) => idSet.has(w.id));
+        const rest = sorted.filter((w) => !idSet.has(w.id));
+        const selected = sorted.filter((w) => idSet.has(w.id));
+        const reordered = [...rest.slice(0, insertAt), ...selected, ...rest.slice(insertAt)];
+        const orderById = new Map(reordered.map((w, i) => [w.id, i]));
+        return {
+          ...d,
+          groups: [...d.groups, newGroup],
+          windows: d.windows.map((w) =>
+            idSet.has(w.id)
+              ? { ...w, groupId, sidebarOrder: orderById.get(w.id)! }
+              : { ...w, sidebarOrder: orderById.get(w.id)! }
+          )
+        };
+      })
+    })),
+
+  moveSidebarOrder: (deskId, windowId, direction) =>
+    set((s) => ({
+      desks: s.desks.map((d) => {
+        if (d.id !== deskId) return d;
+        const sorted = [...d.windows].sort((a, b) => a.sidebarOrder - b.sidebarOrder);
+        const idx = sorted.findIndex((w) => w.id === windowId);
+        const otherIdx = direction === 'up' ? idx - 1 : idx + 1;
+        if (idx === -1 || otherIdx < 0 || otherIdx >= sorted.length) return d;
+        const moved = sorted[idx];
+        const other = sorted[otherIdx];
+        // Swapping adjacent sidebarOrder values is enough to change visual
+        // position; a move that crosses into a different contiguous
+        // groupId run also adopts that run's groupId (or leaves the group
+        // when it crosses into the ungrouped run), so "windows in the same
+        // group stay together" holds after every move, not just this one.
+        const [movedOrder, otherOrder] = [moved.sidebarOrder, other.sidebarOrder];
+        return {
+          ...d,
+          windows: d.windows.map((w) => {
+            if (w.id === moved.id) {
+              return { ...w, sidebarOrder: otherOrder, groupId: other.groupId };
             }
-          : d
-      )
+            if (w.id === other.id) {
+              return { ...w, sidebarOrder: movedOrder };
+            }
+            return w;
+          })
+        };
+      })
     })),
 
   addFavorite: (f) =>
@@ -336,6 +429,7 @@ export const useStore = create<AppState>((set) => ({
     })),
 
   markNotificationsSeen: () => set({ unreadCount: 0 }),
+  setNotificationsPanelOpen: (open) => set({ notificationsPanelOpen: open }),
 
   removeNotification: (id) =>
     set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),
@@ -357,7 +451,11 @@ export const useStore = create<AppState>((set) => ({
   resetKeybinding: (id) =>
     set((s) => ({ keybindings: { ...s.keybindings, [id]: DEFAULT_KEYBINDINGS[id] } })),
   resetAllKeybindings: () => set({ keybindings: { ...DEFAULT_KEYBINDINGS } }),
-  setKeybindingsOpen: (open) => set({ keybindingsOpen: open })
+  setKeybindingsOpen: (open) => set({ keybindingsOpen: open }),
+
+  setCanvasBaseColor: (color) => set({ canvasBaseColor: color }),
+  setCanvasGridEnabled: (enabled) => set({ canvasGridEnabled: enabled }),
+  setAppearanceOpen: (open) => set({ appearanceOpen: open })
 }));
 
 export const activeDesk = (s: AppState): Desk =>

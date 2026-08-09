@@ -48,6 +48,11 @@ export interface WindowNode {
   h: number;
   z: number;
   groupId: string | null;
+  // Position in the left sidebar list — independent of z (canvas stacking)
+  // and creation order, so the user can reorder the sidebar without
+  // affecting anything on the canvas. Windows sort by this within a desk;
+  // a contiguous run of the same groupId renders as that group's block.
+  sidebarOrder: number;
 }
 
 export interface Group {
@@ -129,6 +134,10 @@ export interface PersistedState {
   // User-customized shortcut combos, keyed by KeybindingId; missing entries
   // fall back to DEFAULT_KEYBINDINGS (see keybindings.ts).
   keybindings?: Record<string, string>;
+  // Canvas appearance (see AppearanceSettings.tsx) — the base color the grid
+  // renders on top of, and whether the grid is shown at all.
+  canvasBaseColor?: string;
+  canvasGridEnabled?: boolean;
 }
 
 export type ToolMode = 'select' | 'hand';

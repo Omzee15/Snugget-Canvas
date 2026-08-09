@@ -95,6 +95,7 @@ const TOAST_MS = 6000;
 
 function NotificationToasts() {
   const notifications = useStore((s) => s.notifications);
+  const notificationsPanelOpen = useStore((s) => s.notificationsPanelOpen);
   const [toastIds, setToastIds] = useState<string[]>([]);
   const seenRef = useRef<Set<string>>(new Set());
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -114,6 +115,16 @@ function NotificationToasts() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notifications]);
+
+  // Opening the bell panel makes every still-sliding-in toast redundant —
+  // the same notifications are now listed there, so the previews should
+  // disappear immediately instead of finishing their own timers.
+  useEffect(() => {
+    if (!notificationsPanelOpen) return;
+    timersRef.current.forEach((t) => clearTimeout(t));
+    timersRef.current.clear();
+    setToastIds([]);
+  }, [notificationsPanelOpen]);
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -189,14 +200,20 @@ function NotificationToasts() {
 }
 
 function NotificationsBell() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const notifications = useStore((s) => s.notifications);
   const unread = useStore((s) => s.unreadCount);
 
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    useStore.getState().setNotificationsPanelOpen(next);
+  };
+
   const toggle = () => {
-    setOpen(!open);
-    if (!open) useStore.getState().markNotificationsSeen();
+    const next = !open;
+    setOpen(next);
+    if (next) useStore.getState().markNotificationsSeen();
   };
 
   const jump = (n: AppNotification) => {

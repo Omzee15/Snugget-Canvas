@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { openApp, openImage } from './apps';
 import { snugget } from './bridge';
 import { canvasController } from './canvasController';
+import { AppearanceSettings } from './components/AppearanceSettings';
 import { BookmarksPanel } from './components/BookmarksPanel';
 import { CanvasView } from './components/CanvasView';
 import { CommandPalette } from './components/CommandPalette';
@@ -24,6 +25,13 @@ const deleteSelected = () => {
   s.selectedWindowIds.forEach((windowId) => s.removeWindow(desk.id, windowId));
 };
 
+const groupSelected = () => {
+  const s = useStore.getState();
+  if (s.selectedWindowIds.length < 2) return;
+  const desk = activeDesk(s);
+  s.groupSelectedWindows(desk.id, s.selectedWindowIds);
+};
+
 export default function App() {
   const hydrated = useStore((s) => s.hydrated);
   const paletteOpen = useStore((s) => s.paletteOpen);
@@ -31,6 +39,7 @@ export default function App() {
   const mode = useStore((s) => s.mode);
   const spaceHeld = useStore((s) => s.spaceHeld);
   const keybindingsOpen = useStore((s) => s.keybindingsOpen);
+  const appearanceOpen = useStore((s) => s.appearanceOpen);
 
   useEffect(() => {
     snugget.loadState().then((saved) => useStore.getState().hydrate(saved));
@@ -51,7 +60,9 @@ export default function App() {
           wheelSlots,
           lastClaudeDir,
           recentClaudeDirs,
-          keybindings
+          keybindings,
+          canvasBaseColor,
+          canvasGridEnabled
         } = useStore.getState();
         snugget.saveState({
           desks,
@@ -61,7 +72,9 @@ export default function App() {
           wheelSlots,
           lastClaudeDir,
           recentClaudeDirs,
-          keybindings
+          keybindings,
+          canvasBaseColor,
+          canvasGridEnabled
         });
       }, 400);
     });
@@ -169,6 +182,9 @@ export default function App() {
       } else if (combo === kb.closeWindow) {
         e.preventDefault();
         deleteSelected();
+      } else if (combo === kb.createGroup) {
+        e.preventDefault();
+        groupSelected();
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -221,6 +237,7 @@ export default function App() {
       {bookmarksOpen && <BookmarksPanel />}
       <ShortcutWheel />
       {keybindingsOpen && <KeybindingsSettings />}
+      {appearanceOpen && <AppearanceSettings />}
     </div>
   );
 }

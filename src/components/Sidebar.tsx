@@ -2,14 +2,55 @@ import { useEffect, useState } from 'react';
 import { canvasController } from '../canvasController';
 import { snugget } from '../bridge';
 import { useStore } from '../store';
-import type { Desk, WindowNode } from '../types';
+import type { Desk, Group, WindowNode } from '../types';
 
 interface Editing {
   kind: 'desk' | 'group';
   id: string;
 }
 
-function ScreenRow({ desk, win, indent }: { desk: Desk; win: WindowNode; indent: boolean }) {
+type SidebarBlock =
+  | { kind: 'group'; group: Group; members: WindowNode[] }
+  | { kind: 'loose'; win: WindowNode };
+
+// Windows sort by sidebarOrder (independent of canvas z-order / creation
+// order — see WindowNode.sidebarOrder) and are chunked into contiguous runs
+// of the same groupId, so "windows in the same group are together" holds
+// regardless of how they got there (multi-select + Cmd+G, or the per-row
+// group dropdown, both keep a group's members adjacent in this order).
+function buildSidebarBlocks(desk: Desk): SidebarBlock[] {
+  const sorted = [...desk.windows].sort((a, b) => a.sidebarOrder - b.sidebarOrder);
+  const groupsById = new Map(desk.groups.map((g) => [g.id, g]));
+  const blocks: SidebarBlock[] = [];
+  for (const win of sorted) {
+    const group = win.groupId ? groupsById.get(win.groupId) : undefined;
+    if (!group) {
+      blocks.push({ kind: 'loose', win });
+      continue;
+    }
+    const last = blocks[blocks.length - 1];
+    if (last?.kind === 'group' && last.group.id === group.id) {
+      last.members.push(win);
+    } else {
+      blocks.push({ kind: 'group', group, members: [win] });
+    }
+  }
+  return blocks;
+}
+
+function ScreenRow({
+  desk,
+  win,
+  indent,
+  canMoveUp,
+  canMoveDown
+}: {
+  desk: Desk;
+  win: WindowNode;
+  indent: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+}) {
   const selected = useStore(
     (s) => s.selectedWindowId === win.id && s.activeDeskId === desk.id
   );
@@ -92,6 +133,30 @@ function ScreenRow({ desk, win, indent }: { desk: Desk; win: WindowNode; indent:
             </option>
           ))}
         </select>
+      </span>
+      <span className="row-reorder">
+        <button
+          className="icon-btn row-move"
+          title="Move up"
+          disabled={!canMoveUp}
+          onClick={(e) => {
+            e.stopPropagation();
+            useStore.getState().moveSidebarOrder(desk.id, win.id, 'up');
+          }}
+        >
+          ▲
+        </button>
+        <button
+          className="icon-btn row-move"
+          title="Move down"
+          disabled={!canMoveDown}
+          onClick={(e) => {
+            e.stopPropagation();
+            useStore.getState().moveSidebarOrder(desk.id, win.id, 'down');
+          }}
+        >
+          ▼
+        </button>
       </span>
       <button
         className="icon-btn row-close"
@@ -184,9 +249,7 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-header">
-        <span className="logo">Snugget Canvas</span>
-      </div>
+      <div className="sidebar-header" />
 
       <div className="sidebar-section">
         <span>Desktops</span>
@@ -202,10 +265,10 @@ export function Sidebar() {
       <div className="desk-list">
         {desks.map((desk) => {
           const expanded = !collapsed[desk.id];
-          const grouped = new Set(desk.groups.map((g) => g.id));
-          const ungrouped = desk.windows.filter(
-            (w) => !w.groupId || !grouped.has(w.groupId)
-          );
+          const blocks = buildSidebarBlocks(desk);
+          // Flat position (across all blocks) is what up/down actually
+          // moves along — used only to disable the button at each end.
+          const flatOrder = [...desk.windows].sort((a, b) => a.sidebarOrder - b.sidebarOrder);
           return (
             <div key={desk.id} className="desk-block">
               <div
@@ -254,8 +317,21 @@ export function Sidebar() {
 
               {expanded && (
                 <div className="desk-children">
-                  {desk.groups.map((group) => {
-                    const members = desk.windows.filter((w) => w.groupId === group.id);
+                  {blocks.map((block) => {
+                    if (block.kind === 'loose') {
+                      const i = flatOrder.findIndex((w) => w.id === block.win.id);
+                      return (
+                        <ScreenRow
+                          key={block.win.id}
+                          desk={desk}
+                          win={block.win}
+                          indent={false}
+                          canMoveUp={i > 0}
+                          canMoveDown={i < flatOrder.length - 1}
+                        />
+                      );
+                    }
+                    const { group, members } = block;
                     return (
                       <div key={group.id}>
                         <div
@@ -283,27 +359,26 @@ export function Sidebar() {
                             </>
                           )}
                         </div>
-                        {members.map((win) => (
-                          <ScreenRow key={win.id} desk={desk} win={win} indent />
-                        ))}
+                        {members.map((win) => {
+                          const i = flatOrder.findIndex((w) => w.id === win.id);
+                          return (
+                            <ScreenRow
+                              key={win.id}
+                              desk={desk}
+                              win={win}
+                              indent
+                              canMoveUp={i > 0}
+                              canMoveDown={i < flatOrder.length - 1}
+                            />
+                          );
+                        })}
                       </div>
                     );
                   })}
 
-                  {ungrouped.map((win) => (
-                    <ScreenRow key={win.id} desk={desk} win={win} indent={false} />
-                  ))}
-
                   {desk.windows.length === 0 && (
                     <div className="no-screens">No screens open</div>
                   )}
-
-                  <button
-                    className="new-group-btn"
-                    onClick={() => useStore.getState().addGroup(desk.id)}
-                  >
-                    + New group
-                  </button>
                 </div>
               )}
             </div>
@@ -320,6 +395,12 @@ function SidebarFooter() {
   return (
     <div className="sidebar-footer">
       <GoogleConnect />
+      <button
+        className="sidebar-kb-settings"
+        onClick={() => useStore.getState().setAppearanceOpen(true)}
+      >
+        Appearance…
+      </button>
       <button
         className="sidebar-kb-settings"
         onClick={() => useStore.getState().setKeybindingsOpen(true)}

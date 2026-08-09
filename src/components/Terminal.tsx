@@ -132,6 +132,11 @@ export function Terminal({ deskId, node }: Props) {
         useStore.getState().setBookmarksOpen(!useStore.getState().bookmarksOpen);
         return false;
       }
+      if (combo === kb.createGroup) {
+        const s = useStore.getState();
+        if (s.selectedWindowIds.length >= 2) s.groupSelectedWindows(deskId, s.selectedWindowIds);
+        return false;
+      }
       return true;
     });
 
@@ -282,12 +287,23 @@ export function Terminal({ deskId, node }: Props) {
     };
     const disposeExitListener = snugget.onTerminalExit(onTerminalExit);
 
+    // ResizeObserver can fire without the element's pixel size actually
+    // changing (e.g. a layout pass triggered by selecting the window) — PTY
+    // resize() still sends SIGWINCH to the child regardless, and shells /
+    // TUIs that redraw their last screen on that signal made "task
+    // completed" alerts reappear just from clicking a window that had one.
+    // Only forward a resize when cols/rows genuinely changed.
+    let lastCols = xterm.cols;
+    let lastRows = xterm.rows;
     const resizeObserver = new ResizeObserver(() => {
       try {
         fitAddon.fit();
       } catch {
         /* container not measurable yet */
       }
+      if (xterm.cols === lastCols && xterm.rows === lastRows) return;
+      lastCols = xterm.cols;
+      lastRows = xterm.rows;
       if (sessionId) snugget.resizeTerminal(sessionId, xterm.cols, xterm.rows);
     });
     resizeObserver.observe(container);

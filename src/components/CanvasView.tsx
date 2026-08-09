@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { canvasController } from '../canvasController';
 import { dragListen } from '../drag';
+import { formatCombo } from '../keybindings';
 import { activeDesk, useStore } from '../store';
 import type { Viewport } from '../types';
 import { AppWindow } from './AppWindow';
@@ -11,19 +12,60 @@ const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
 interface LayerRefs {
   world: HTMLDivElement | null;
-  grid: HTMLDivElement | null;
+  gridMinor: HTMLDivElement | null;
+  gridMajor: HTMLDivElement | null;
 }
 
-const gridStyle = (vp: Viewport) => ({
-  backgroundSize: `${24 * vp.zoom}px ${24 * vp.zoom}px`,
-  backgroundPosition: `${vp.x}px ${vp.y}px`,
-  opacity: vp.zoom < 0.35 ? 0 : 0.55
-});
+// Blueprint-style two-tier grid: fine minor lines every cell, a bolder major
+// line every 5 cells. These are two separate elements (not one multi-layer
+// background) specifically so they can fade out independently — zoomed out
+// far enough, the minor lines would be sub-pixel noise, but the major lines
+// should stay visible as long as possible instead of the grid vanishing
+// entirely. Both are imperatively updated on every pan/zoom frame (see
+// `apply` below) without React re-rendering per frame.
+const GRID_CELL = 24;
+const GRID_MAJOR_EVERY = 5;
+
+const minorGridStyle = (vp: Viewport) => {
+  const size = GRID_CELL * vp.zoom;
+  const hidden = vp.zoom < 0.2;
+  return {
+    backgroundSize: `${size}px ${size}px, ${size}px ${size}px`,
+    backgroundPosition: `${vp.x}px ${vp.y}px, ${vp.x}px ${vp.y}px`,
+    opacity: hidden ? 0 : 1,
+    // opacity:0 alone still paints a densely tiled gradient every frame at
+    // low zoom (visible as flicker/jank under load) — visibility actually
+    // skips paint while staying cheap to flip back, unlike display:none
+    // which would trigger layout.
+    visibility: hidden ? ('hidden' as const) : ('visible' as const)
+  };
+};
+
+// Below this, major-grid tiles are a few px or less — individual lines are
+// no longer perceptible, but the browser was still repainting a densely
+// tiled gradient across the full viewport every frame (visible as flicker
+// under load, and pure wasted GPU work either way), so it fades out here
+// instead of only at MIN_ZOOM/6 (unreachable — MIN_ZOOM itself is 0.05).
+const MAJOR_GRID_FADE_ZOOM = 0.1;
+
+const majorGridStyle = (vp: Viewport) => {
+  const size = GRID_CELL * vp.zoom * GRID_MAJOR_EVERY;
+  const hidden = vp.zoom < MAJOR_GRID_FADE_ZOOM;
+  return {
+    backgroundSize: `${size}px ${size}px, ${size}px ${size}px`,
+    backgroundPosition: `${vp.x}px ${vp.y}px, ${vp.x}px ${vp.y}px`,
+    opacity: hidden ? 0 : 1,
+    visibility: hidden ? ('hidden' as const) : ('visible' as const)
+  };
+};
 
 export function CanvasView() {
   const areaRef = useRef<HTMLDivElement>(null);
   const desks = useStore((s) => s.desks);
   const activeDeskId = useStore((s) => s.activeDeskId);
+  const canvasBaseColor = useStore((s) => s.canvasBaseColor);
+  const canvasGridEnabled = useStore((s) => s.canvasGridEnabled);
+  const paletteCombo = useStore((s) => s.keybindings.palette);
   const [marquee, setMarquee] = useState<{
     x: number;
     y: number;
@@ -55,11 +97,19 @@ export function CanvasView() {
       if (refs?.world) {
         refs.world.style.transform = `translate(${vp.x}px, ${vp.y}px) scale(${vp.zoom})`;
       }
-      if (refs?.grid) {
-        const g = gridStyle(vp);
-        refs.grid.style.backgroundSize = g.backgroundSize;
-        refs.grid.style.backgroundPosition = g.backgroundPosition;
-        refs.grid.style.opacity = String(g.opacity);
+      if (refs?.gridMinor) {
+        const g = minorGridStyle(vp);
+        refs.gridMinor.style.backgroundSize = g.backgroundSize;
+        refs.gridMinor.style.backgroundPosition = g.backgroundPosition;
+        refs.gridMinor.style.opacity = String(g.opacity);
+        refs.gridMinor.style.visibility = g.visibility;
+      }
+      if (refs?.gridMajor) {
+        const g = majorGridStyle(vp);
+        refs.gridMajor.style.backgroundSize = g.backgroundSize;
+        refs.gridMajor.style.backgroundPosition = g.backgroundPosition;
+        refs.gridMajor.style.opacity = String(g.opacity);
+        refs.gridMajor.style.visibility = g.visibility;
       }
     };
 
@@ -334,24 +384,48 @@ export function CanvasView() {
   }, []);
 
   return (
-    <div className="canvas-area" ref={areaRef}>
+    <div className="canvas-area" ref={areaRef} style={{ background: canvasBaseColor }}>
       {desks.map((desk) => {
         const isActive = desk.id === activeDeskId;
         const vp = desk.viewport;
         return (
           <div key={desk.id} className={`desk-layer${isActive ? ' active' : ''}`}>
-            <div
-              className="grid-bg"
-              data-canvas-bg
-              ref={(el) => {
-                (layerRefs.current[desk.id] ??= { world: null, grid: null }).grid = el;
-              }}
-              style={gridStyle(vp)}
-            />
+            {canvasGridEnabled && (
+              <>
+                <div
+                  className="grid-bg grid-bg-minor"
+                  data-canvas-bg
+                  ref={(el) => {
+                    (layerRefs.current[desk.id] ??= {
+                      world: null,
+                      gridMinor: null,
+                      gridMajor: null
+                    }).gridMinor = el;
+                  }}
+                  style={minorGridStyle(vp)}
+                />
+                <div
+                  className="grid-bg grid-bg-major"
+                  ref={(el) => {
+                    (layerRefs.current[desk.id] ??= {
+                      world: null,
+                      gridMinor: null,
+                      gridMajor: null
+                    }).gridMajor = el;
+                  }}
+                  style={majorGridStyle(vp)}
+                />
+              </>
+            )}
+            {!canvasGridEnabled && <div className="grid-bg-hitbox" data-canvas-bg />}
             <div
               className="world"
               ref={(el) => {
-                (layerRefs.current[desk.id] ??= { world: null, grid: null }).world = el;
+                (layerRefs.current[desk.id] ??= {
+                  world: null,
+                  gridMinor: null,
+                  gridMajor: null
+                }).world = el;
               }}
               style={{ transform: `translate(${vp.x}px, ${vp.y}px) scale(${vp.zoom})` }}
             >
@@ -368,7 +442,7 @@ export function CanvasView() {
               <div className="empty-hint">
                 <div className="empty-hint-title">This desktop is empty</div>
                 <div className="empty-hint-sub">
-                  Press <kbd>⇧A</kbd> to open the menu
+                  Press <kbd>{formatCombo(paletteCombo)}</kbd> to open the menu
                 </div>
               </div>
             )}

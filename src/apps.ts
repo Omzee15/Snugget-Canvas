@@ -61,7 +61,7 @@ export function openApp(url: string, worldPos?: { x: number; y: number }) {
   const h = WEB_WINDOW_H;
   const cascade = worldPos ? 0 : (desk.windows.length % 6) * 36;
 
-  const node: WindowNode = {
+  const node: Omit<WindowNode, 'sidebarOrder'> = {
     id: uid(),
     kind: 'web',
     url,
@@ -87,7 +87,7 @@ export function openBlankPage(worldPos?: { x: number; y: number }) {
   const h = WEB_WINDOW_H;
   const cascade = worldPos ? 0 : (desk.windows.length % 6) * 36;
 
-  const node: WindowNode = {
+  const node: Omit<WindowNode, 'sidebarOrder'> = {
     id: uid(),
     kind: 'blank',
     url: '',
@@ -124,7 +124,7 @@ function openTerminal(
   const h = 700;
   const cascade = worldPos ? 0 : (desk.windows.length % 6) * 36;
 
-  const node: WindowNode = {
+  const node: Omit<WindowNode, 'sidebarOrder'> = {
     id: uid(),
     kind: 'terminal',
     url: '',
@@ -164,7 +164,7 @@ export function openTextBox(worldPos?: { x: number; y: number }) {
   const h = 320;
   const cascade = worldPos ? 0 : (desk.windows.length % 6) * 36;
 
-  const node: WindowNode = {
+  const node: Omit<WindowNode, 'sidebarOrder'> = {
     id: uid(),
     kind: 'text',
     url: '',
@@ -192,7 +192,7 @@ export function openImage(dataUrl: string, worldPos?: { x: number; y: number }) 
   const w = 480;
   const h = 360;
 
-  const node: WindowNode = {
+  const node: Omit<WindowNode, 'sidebarOrder'> = {
     id: uid(),
     kind: 'image',
     url: '',
@@ -229,7 +229,7 @@ export function openDevToolsWindow(source: WindowNode) {
   const w = 560;
   const h = source.h;
 
-  const node: WindowNode = {
+  const node: Omit<WindowNode, 'sidebarOrder'> = {
     id: uid(),
     kind: 'devtools',
     url: '',
@@ -264,7 +264,7 @@ export function openNativeApp(nativeApp: NativeAppKind, worldPos?: { x: number; 
   const h = 700;
   const cascade = worldPos ? 0 : (desk.windows.length % 6) * 36;
 
-  const node: WindowNode = {
+  const node: Omit<WindowNode, 'sidebarOrder'> = {
     id: uid(),
     kind: 'native',
     url: '',

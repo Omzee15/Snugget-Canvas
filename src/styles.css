@@ -102,17 +102,7 @@ body,
 
 .sidebar-header {
   height: 52px;
-  display: flex;
-  align-items: flex-end;
-  padding: 0 16px 10px;
   -webkit-app-region: drag;
-}
-
-.logo {
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: 0.2px;
-  margin-left: 56px; /* clear macOS traffic lights */
 }
 
 .sidebar-section {
@@ -293,6 +283,36 @@ body,
   display: block;
 }
 
+.row-reorder {
+  display: none;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 1px;
+}
+
+.screen-row:hover .row-reorder {
+  display: flex;
+}
+
+.row-move {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--text-dim);
+}
+
+.row-move:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.row-move:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
 .no-screens {
   padding: 5px 8px;
   color: var(--text-dim);
@@ -300,21 +320,6 @@ body,
   font-style: italic;
 }
 
-.new-group-btn {
-  display: block;
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  font-size: 11px;
-  padding: 5px 8px;
-  cursor: pointer;
-  border-radius: 6px;
-}
-
-.new-group-btn:hover {
-  background: var(--panel-2);
-  color: var(--text);
-}
 
 .desk-item:hover {
   background: var(--panel-2);
@@ -458,7 +463,28 @@ kbd {
 .grid-bg {
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(circle, #34373d 1px, transparent 1px);
+}
+
+.grid-bg-minor {
+  /* Order matches minorGridStyle()'s comma-separated backgroundSize/Position. */
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+}
+
+.grid-bg-major {
+  /* Sits on top of the minor grid, purely decorative — clicks must fall
+     through to the minor layer beneath (data-canvas-bg lives there) so the
+     canvas background click/marquee-select hit-test still works. */
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.14) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.14) 1px, transparent 1px);
+}
+
+.grid-bg-hitbox {
+  position: absolute;
+  inset: 0;
 }
 
 .world {
@@ -1719,6 +1745,176 @@ body.dragging {
 .kb-capture-cancel:hover {
   color: var(--text);
   background: var(--panel-2);
+}
+
+/* ---------- Appearance settings ---------- */
+
+.appear-toggle {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.appear-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.appear-toggle-track {
+  position: absolute;
+  inset: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transition: background 0.12s ease;
+}
+
+.appear-toggle-track::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.appear-toggle input:checked + .appear-toggle-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.appear-toggle input:checked + .appear-toggle-track::before {
+  transform: translateX(14px);
+  background: #fff;
+}
+
+.appear-color-row {
+  padding-bottom: 4px;
+}
+
+.appear-color-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.appear-color-input {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.appear-color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.appear-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 4px;
+}
+
+.appear-color-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.appear-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 18px 16px;
+}
+
+.appear-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0;
+}
+
+.appear-swatch:hover {
+  border-color: var(--text-dim);
+}
+
+.appear-swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(79, 142, 247, 0.35);
+}
+
+.appear-wheel-title {
+  margin-top: 6px;
+}
+
+.appear-wheel-row {
+  display: flex;
+  justify-content: center;
+  padding: 8px 18px 18px;
+}
+
+.wheel-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.wheel-disc-wrap {
+  position: relative;
+}
+
+.wheel-disc {
+  border-radius: 50%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.wheel-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.wheel-lightness {
+  width: 160px;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.wheel-lightness::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
 }
 
 .palette-save-fav {

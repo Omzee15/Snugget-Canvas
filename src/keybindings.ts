@@ -15,7 +15,8 @@ export type KeybindingId =
   | 'toolSelect'
   | 'toolHand'
   | 'shortcutWheel'
-  | 'closeWindow';
+  | 'closeWindow'
+  | 'createGroup';
 
 export interface KeybindingDef {
   id: KeybindingId;
@@ -30,6 +31,7 @@ export const KEYBINDING_DEFS: KeybindingDef[] = [
   { id: 'deselect', label: 'Deselect window', category: 'General', default: 'cmd+escape' },
   { id: 'shortcutWheel', label: 'Open app wheel', category: 'General', default: 'w' },
   { id: 'closeWindow', label: 'Close selected window(s)', category: 'General', default: 'shift+backspace' },
+  { id: 'createGroup', label: 'Group selected windows', category: 'General', default: 'cmd+g' },
   { id: 'toolSelect', label: 'Select / move tool', category: 'Canvas', default: 'v' },
   { id: 'toolHand', label: 'Hand (pan) tool', category: 'Canvas', default: 'h' },
   { id: 'zoomIn', label: 'Zoom in', category: 'Canvas', default: 'cmd+=' },

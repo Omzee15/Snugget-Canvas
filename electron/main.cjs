@@ -89,6 +89,11 @@ function destroyTerminalSession(id) {
 function resizeTerminalSession(id, cols, rows) {
   const ptyProcess = terminalSessions.get(id);
   if (!ptyProcess || !cols || !rows) return;
+  // resize() still signals SIGWINCH even when the size is unchanged, which
+  // makes shells/TUIs that redraw their last screen on that signal re-emit
+  // output the idle-scanner (Terminal.tsx) can mistake for fresh activity —
+  // skip the no-op case at the source too, not just in the renderer.
+  if (ptyProcess.cols === cols && ptyProcess.rows === rows) return;
   try {
     ptyProcess.resize(cols, rows);
   } catch {
