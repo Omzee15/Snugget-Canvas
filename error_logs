@@ -1,0 +1,46 @@
+Progress: resolved 250, reused 250, downloaded 0, added 250, done
+
+dependencies:
++ @xterm/addon-fit 0.11.0
++ @xterm/addon-serialize 0.14.0
++ @xterm/xterm 6.0.0
++ dotenv 17.4.2
++ google-auth-library 10.9.1
++ node-pty 1.1.0
++ react 18.3.1
++ react-dom 18.3.1
++ zustand 4.5.7
+
+devDependencies:
++ @electron/rebuild 4.2.0
++ @types/react 18.3.31
++ @types/react-dom 18.3.7
++ @vitejs/plugin-react 4.7.0
++ concurrently 9.2.4
++ electron 38.8.6
++ typescript 5.9.3
++ vite 5.4.21
++ wait-on 8.0.5
+
+. postinstall$ electron-rebuild -f -w node-pty
+│ Searching dependency tree
+│ Building modules: node-pty
+│   TOUCH Release/obj.target/../../../node-addon-api@7.1.1/node_modules/node-addon-api/node_addon_api_except.stamp
+│   CXX(target) Release/obj.target/pty/src/unix/pty.o
+│ In file included from ../src/unix/pty.cc:21:
+│ ../../../../node-addon-api@7.1.1/node_modules/node-addon-api/napi.h:14:10: fatal error: 'functional' file not found
+│    14 | #include <functional>
+│       |          ^~~~~~~~~~~~
+│ 1 error generated.
+│ make: *** [Release/obj.target/pty/src/unix/pty.o] Error 1
+│ Error: `make` failed with exit code: 2
+│     at ChildProcess.<anonymous> (/Users/pikachu/Desktop/Jiggle/Snugget-Canvas/node_modules/.pnpm/node-gyp@12.4.0/node_modules/node-gyp/lib/build.js:219:23)
+│ ✖ Rebuild Failed
+│ An unhandled error occurred inside electron-rebuild
+│ node-gyp failed to rebuild '/Users/pikachu/Desktop/Jiggle/Snugget-Canvas/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty'
+│ Error: node-gyp failed to rebuild '/Users/pikachu/Desktop/Jiggle/Snugget-Canvas/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty'
+│     at ChildProcess.<anonymous> (file:///Users/pikachu/Desktop/Jiggle/Snugget-Canvas/node_modules/.pnpm/@electron+rebuild@4.2.0/node_modules/@electron/rebuild/lib/module-type/node-gyp/node-gyp.js:120:24)
+│     at ChildProcess.emit (node:events:507:28)
+│     at ChildProcess._handle.onexit (node:internal/child_process:294:12)
+└─ Failed in 3.4s at /Users/pikachu/Desktop/Jiggle/Snugget-Canvas
+ ELIFECYCLE  Command failed with exit code 255.
