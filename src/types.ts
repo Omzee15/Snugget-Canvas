@@ -35,6 +35,14 @@ export interface WindowNode {
   // When true, this terminal window shows a directory-picker in place of the
   // terminal itself — the PTY isn't started until a directory is chosen.
   pendingCwd?: boolean;
+  // True for a terminal opened via "Claude Code" specifically (independent
+  // of title, which the user can rename) — gates the prompt-chain "+"
+  // button/queue UI to terminals actually running Claude Code.
+  isClaude?: boolean;
+  // Queued follow-up prompts for this terminal's Claude Code session, in
+  // order — the front of the queue is auto-typed and submitted the next
+  // time Claude Code reports (via prompt_task_completed) that it's done.
+  promptChain?: string[];
   text?: string;
   imageDataUrl?: string;
   // Which app a 'native' window mirrors.

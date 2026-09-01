@@ -38,13 +38,81 @@ function sendTerminalData(id, chunk) {
 // ~/.zshrc first so their normal setup/prompt/aliases are unaffected.
 // Bash's PROMPT_COMMAND equivalent is intentionally not added: it'd require
 // detecting the shell and rewriting PS1, more invasive for a nice-to-have.
-function ensureOsc7ZdotDir() {
+// OSC channel used by the prompt-chain helper scripts (see
+// ensurePromptChainScripts below) to report a Claude Code task's outcome
+// back to the renderer over the same PTY-output pipe already used for
+// everything else — no separate IPC channel needed. 9377 is unassigned in
+// the standard OSC registry and unrelated to OSC 7 (cwd), which xterm's own
+// handler in Terminal.tsx already intercepts and consumes.
+const PROMPT_CHAIN_OSC = 9377;
+
+// Two tiny CLI scripts a running Claude Code instance is instructed (via the
+// global ~/.claude/CLAUDE.md, see ensureGlobalClaudeInstructions) to call
+// when it finishes a task or hits a question it needs the user to answer.
+// Each just prints one OSC-wrapped JSON line — picked up by Terminal.tsx's
+// registerOscHandler(PROMPT_CHAIN_OSC, ...) — then exits; all the real logic
+// lives in the renderer.
+function ensurePromptChainScripts() {
+  const dir = path.join(app.getPath('userData'), 'scripts');
+  fs.mkdirSync(dir, { recursive: true });
+
+  const scriptFor = (event) =>
+    '#!/bin/sh\n' +
+    '# Written by Snugget — reports a Claude Code task event back to the app.\n' +
+    '# Escapes backslashes/quotes/newlines by hand (no python/jq dependency)\n' +
+    '# so this works on a bare-bones shell environment.\n' +
+    'esc=$(printf \'%s\' "$*" | sed -e \'s/\\\\/\\\\\\\\/g\' -e \'s/"/\\\\"/g\')\n' +
+    'esc=$(printf \'%s\\n\' "$esc" | sed \'$!s/$/\\\\n/\' | tr -d \'\\n\')\n' +
+    `printf '\\033]${PROMPT_CHAIN_OSC};{"event":"${event}","text":"%s"}\\033\\\\' "$esc"\n`;
+
+  const completedFile = path.join(dir, 'prompt_task_completed');
+  const questionFile = path.join(dir, 'prompt_task_question');
+  fs.writeFileSync(completedFile, scriptFor('completed'));
+  fs.writeFileSync(questionFile, scriptFor('question'));
+  fs.chmodSync(completedFile, 0o755);
+  fs.chmodSync(questionFile, 0o755);
+  return dir;
+}
+
+// Claude Code reads ~/.claude/CLAUDE.md as global, cross-project instructions
+// automatically — appending here (once, idempotently) is all that's needed
+// to make every Claude Code session, in any project, call the prompt-chain
+// scripts; no per-spawn flag required.
+function ensureGlobalClaudeInstructions(scriptsDir) {
+  const claudeDir = path.join(app.getPath('home'), '.claude');
+  const mdFile = path.join(claudeDir, 'CLAUDE.md');
+  const marker = '<!-- snugget:prompt-chain -->';
+  const block =
+    `${marker}\n` +
+    '## Snugget prompt chain integration\n' +
+    'This session may be running inside the Snugget Canvas app, which can queue up ' +
+    'follow-up prompts for you. To integrate with it:\n' +
+    `- When you finish implementing what was asked (the task is done, not just a sub-step), run: ` +
+    `\`${path.join(scriptsDir, 'prompt_task_completed')} "<one-line summary of what you did>"\`\n` +
+    `- If you get blocked and need the user to answer a question or make a decision before continuing, run: ` +
+    `\`${path.join(scriptsDir, 'prompt_task_question')} "<your question>"\`\n` +
+    '- Only call one of these, at most once per pause, right before you stop and hand control back.\n' +
+    `<!-- /snugget:prompt-chain -->\n`;
+
+  try {
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const existing = fs.existsSync(mdFile) ? fs.readFileSync(mdFile, 'utf8') : '';
+    if (existing.includes(marker)) return;
+    const next = existing.length > 0 ? `${existing.replace(/\s*$/, '')}\n\n${block}` : block;
+    fs.writeFileSync(mdFile, next);
+  } catch {
+    /* best-effort — a missing/unwritable ~/.claude just means no auto-chain */
+  }
+}
+
+function ensureOsc7ZdotDir(scriptsDir) {
   const dir = path.join(app.getPath('userData'), 'zsh-osc7');
   const rcFile = path.join(dir, '.zshrc');
   const rcContents =
     '[ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"\n' +
     '__snugget_osc7() { printf "\\033]7;file://%s%s\\033\\\\" "$HOSTNAME" "$PWD"; }\n' +
-    'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd __snugget_osc7\n';
+    'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd __snugget_osc7\n' +
+    `export PATH="${scriptsDir}:$PATH"\n`;
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(rcFile, rcContents);
   return dir;
@@ -55,7 +123,11 @@ function createTerminalSession(cols, rows, cwd) {
   const shellPath = process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh');
   const startDir = cwd && fs.existsSync(cwd) ? cwd : app.getPath('home');
   const isZsh = shellPath.endsWith('/zsh');
-  const env = isZsh ? { ...process.env, ZDOTDIR: ensureOsc7ZdotDir() } : process.env;
+  const scriptsDir = ensurePromptChainScripts();
+  ensureGlobalClaudeInstructions(scriptsDir);
+  const env = isZsh
+    ? { ...process.env, ZDOTDIR: ensureOsc7ZdotDir(scriptsDir) }
+    : { ...process.env, PATH: `${scriptsDir}:${process.env.PATH || ''}` };
   const ptyProcess = pty.spawn(shellPath, ['-i'], {
     name: 'xterm-256color',
     cols: cols || 80,

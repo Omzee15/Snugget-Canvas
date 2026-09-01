@@ -113,7 +113,8 @@ function openTerminal(
   title: string,
   initialCommand: string | null,
   worldPos?: { x: number; y: number },
-  pendingCwd?: boolean
+  pendingCwd?: boolean,
+  isClaude?: boolean
 ) {
   const s = useStore.getState();
   const desk = activeDesk(s);
@@ -133,6 +134,8 @@ function openTerminal(
     terminalId: null,
     initialCommand,
     pendingCwd: pendingCwd || undefined,
+    isClaude: isClaude || undefined,
+    promptChain: isClaude ? [] : undefined,
     x: Math.round(center.x - w / 2 + cascade),
     y: Math.round(center.y - h / 2 + cascade),
     w,
@@ -151,7 +154,7 @@ export function openNativeTerminal(worldPos?: { x: number; y: number }) {
 // out showing a directory picker in place of the terminal — see
 // ClaudeDirPicker, rendered by AppWindow while node.pendingCwd is true.
 export function requestClaudeTerminal(worldPos?: { x: number; y: number }) {
-  openTerminal('Claude Code', 'claude', worldPos, true);
+  openTerminal('Claude Code', 'claude', worldPos, true, true);
 }
 
 export function openTextBox(worldPos?: { x: number; y: number }) {

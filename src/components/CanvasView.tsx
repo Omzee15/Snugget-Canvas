@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { canvasController } from '../canvasController';
 import { dragListen } from '../drag';
-import { formatCombo } from '../keybindings';
 import { activeDesk, useStore } from '../store';
 import type { Viewport } from '../types';
 import { AppWindow } from './AppWindow';
@@ -65,7 +64,6 @@ export function CanvasView() {
   const activeDeskId = useStore((s) => s.activeDeskId);
   const canvasBaseColor = useStore((s) => s.canvasBaseColor);
   const canvasGridEnabled = useStore((s) => s.canvasGridEnabled);
-  const paletteCombo = useStore((s) => s.keybindings.palette);
   const [marquee, setMarquee] = useState<{
     x: number;
     y: number;
@@ -390,11 +388,18 @@ export function CanvasView() {
         const vp = desk.viewport;
         return (
           <div key={desk.id} className={`desk-layer${isActive ? ' active' : ''}`}>
+            {/* Always-present, never-hidden hit layer for canvas-background
+               clicks/marquee-select — the decorative grid lines below it
+               fade via visibility:hidden at low zoom (cheap paint skip, see
+               minorGridStyle/majorGridStyle), which would otherwise remove
+               data-canvas-bg from hit-testing along with the visuals and
+               silently break marquee-select whenever the minor grid was
+               faded out. */}
+            <div className="grid-bg-hitbox" data-canvas-bg />
             {canvasGridEnabled && (
               <>
                 <div
                   className="grid-bg grid-bg-minor"
-                  data-canvas-bg
                   ref={(el) => {
                     (layerRefs.current[desk.id] ??= {
                       world: null,
@@ -417,7 +422,6 @@ export function CanvasView() {
                 />
               </>
             )}
-            {!canvasGridEnabled && <div className="grid-bg-hitbox" data-canvas-bg />}
             <div
               className="world"
               ref={(el) => {
@@ -440,10 +444,8 @@ export function CanvasView() {
             </div>
             {isActive && desk.windows.length === 0 && (
               <div className="empty-hint">
-                <div className="empty-hint-title">This desktop is empty</div>
-                <div className="empty-hint-sub">
-                  Press <kbd>{formatCombo(paletteCombo)}</kbd> to open the menu
-                </div>
+                <div className="empty-hint-title">Don't be busy.</div>
+                <div className="empty-hint-title">Be productive.</div>
               </div>
             )}
             {isActive && marquee && (

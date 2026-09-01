@@ -71,6 +71,9 @@ interface AppState {
   addWindow: (deskId: string, node: Omit<WindowNode, 'sidebarOrder'>) => void;
   updateWindow: (deskId: string, id: string, patch: Partial<WindowNode>) => void;
   removeWindow: (deskId: string, id: string) => void;
+  addChainPrompt: (deskId: string, windowId: string, prompt: string) => void;
+  removeChainPrompt: (deskId: string, windowId: string, index: number) => void;
+  shiftChainPrompt: (deskId: string, windowId: string) => string | null;
   bringToFront: (deskId: string, id: string) => void;
   renameGroup: (deskId: string, groupId: string, name: string) => void;
   removeGroup: (deskId: string, groupId: string) => void;
@@ -106,7 +109,7 @@ interface AppState {
   setAppearanceOpen: (open: boolean) => void;
 }
 
-export const useStore = create<AppState>((set) => ({
+export const useStore = create<AppState>((set, get) => ({
   desks: [],
   activeDeskId: '',
   selectedWindowId: null,
@@ -251,6 +254,55 @@ export const useStore = create<AppState>((set) => ({
       selectedWindowId: s.selectedWindowId === id ? null : s.selectedWindowId,
       selectedWindowIds: s.selectedWindowIds.filter((selectedId) => selectedId !== id)
     })),
+
+  addChainPrompt: (deskId, windowId, prompt) =>
+    set((s) => ({
+      desks: s.desks.map((d) =>
+        d.id === deskId
+          ? {
+              ...d,
+              windows: d.windows.map((w) =>
+                w.id === windowId ? { ...w, promptChain: [...(w.promptChain ?? []), prompt] } : w
+              )
+            }
+          : d
+      )
+    })),
+
+  removeChainPrompt: (deskId, windowId, index) =>
+    set((s) => ({
+      desks: s.desks.map((d) =>
+        d.id === deskId
+          ? {
+              ...d,
+              windows: d.windows.map((w) =>
+                w.id === windowId
+                  ? { ...w, promptChain: (w.promptChain ?? []).filter((_, i) => i !== index) }
+                  : w
+              )
+            }
+          : d
+      )
+    })),
+
+  // Pops the front of the queue and returns it synchronously so the caller
+  // (Terminal.tsx, on a task-completed event) knows exactly what to type
+  // into the PTY — returns null if the chain is empty.
+  shiftChainPrompt: (deskId, windowId) => {
+    const desk = get().desks.find((d) => d.id === deskId);
+    const win = desk?.windows.find((w) => w.id === windowId);
+    const chain = win?.promptChain ?? [];
+    if (chain.length === 0) return null;
+    const [next, ...rest] = chain;
+    set((s) => ({
+      desks: s.desks.map((d) =>
+        d.id === deskId
+          ? { ...d, windows: d.windows.map((w) => (w.id === windowId ? { ...w, promptChain: rest } : w)) }
+          : d
+      )
+    }));
+    return next;
+  },
 
   bringToFront: (deskId, id) =>
     set((s) => ({
@@ -425,14 +477,23 @@ export const useStore = create<AppState>((set) => ({
   addNotification: (n) =>
     set((s) => ({
       notifications: [n, ...s.notifications].slice(0, 100),
-      unreadCount: s.unreadCount + 1
+      // Don't bump the badge while the panel is already open and showing
+      // this notification — only count ones the user hasn't had a chance to see.
+      unreadCount: s.notificationsPanelOpen ? s.unreadCount : s.unreadCount + 1
     })),
 
   markNotificationsSeen: () => set({ unreadCount: 0 }),
   setNotificationsPanelOpen: (open) => set({ notificationsPanelOpen: open }),
 
   removeNotification: (id) =>
-    set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),
+    set((s) => {
+      const notifications = s.notifications.filter((n) => n.id !== id);
+      // unreadCount has no per-notification "seen" flag to check against, so
+      // clamp it to the list size — otherwise removing a notification that
+      // was never marked seen (e.g. acted on straight from a toast, panel
+      // never opened) leaves the badge overcounting forever.
+      return { notifications, unreadCount: Math.min(s.unreadCount, notifications.length) };
+    }),
 
   clearNotifications: () => set({ notifications: [], unreadCount: 0 }),
 

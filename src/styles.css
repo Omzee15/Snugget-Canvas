@@ -466,6 +466,10 @@ kbd {
 }
 
 .grid-bg-minor {
+  /* Purely decorative — data-canvas-bg lives on .grid-bg-hitbox underneath
+     instead (see CanvasView.tsx), so fading this out via visibility:hidden
+     at low zoom can't take the click/marquee-select hit-test down with it. */
+  pointer-events: none;
   /* Order matches minorGridStyle()'s comma-separated backgroundSize/Position. */
   background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.06) 1px, transparent 1px),
@@ -473,9 +477,7 @@ kbd {
 }
 
 .grid-bg-major {
-  /* Sits on top of the minor grid, purely decorative — clicks must fall
-     through to the minor layer beneath (data-canvas-bg lives there) so the
-     canvas background click/marquee-select hit-test still works. */
+  /* Also purely decorative, same reasoning as .grid-bg-minor above. */
   pointer-events: none;
   background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.14) 1px, transparent 1px),
@@ -870,6 +872,7 @@ body.dragging {
 }
 
 .terminal-shell {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -877,6 +880,175 @@ body.dragging {
   background: #0b0f14;
   color: #d7dde6;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Sits outside the window entirely — a sibling of .window-content anchored
+   to the bottom of .app-window (position:absolute; top:100%), not
+   overlapping the terminal's own content. Stack order is document order:
+   the next prompt to run (index 0) is the first child, so it renders
+   closest to the window; later prompts stack further below it. */
+.prompt-chain {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  width: 100%;
+  margin-top: 8px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prompt-chain-summary {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(13, 17, 23, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 10px;
+  color: #d7dde6;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.prompt-chain-summary:hover {
+  background: rgba(13, 17, 23, 1);
+  border-color: #4a5568;
+}
+
+.prompt-chain-count {
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 10px;
+  color: #9aa5b1;
+}
+
+.prompt-chain-caret {
+  margin-left: auto;
+  color: #9aa5b1;
+  transition: transform 150ms ease;
+}
+
+.prompt-chain-caret.open {
+  transform: rotate(180deg);
+}
+
+.prompt-chain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  max-height: 220px;
+  overflow-y: auto;
+  background: rgba(13, 17, 23, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  backdrop-filter: blur(6px);
+}
+
+.prompt-chain-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: #d7dde6;
+}
+
+.prompt-chain-index {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 10px;
+  color: #9aa5b1;
+}
+
+.prompt-chain-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-chain-remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #9aa5b1;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.prompt-chain-remove:hover {
+  color: #fff;
+}
+
+.prompt-chain-add {
+  pointer-events: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(13, 17, 23, 0.92);
+  color: #d7dde6;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.prompt-chain-add:hover {
+  background: rgba(13, 17, 23, 1);
+  border-color: #4a5568;
+}
+
+.prompt-chain-composer {
+  pointer-events: auto;
+  width: 100%;
+}
+
+.prompt-chain-composer input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(13, 17, 23, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: #d7dde6;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.prompt-chain-composer input:focus {
+  border-color: #4a5568;
 }
 
 .terminal-xterm {

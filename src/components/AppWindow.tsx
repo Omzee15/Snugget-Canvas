@@ -8,6 +8,7 @@ import { activeDesk, uid, useStore } from '../store';
 import { ClaudeDirPicker } from './ClaudeDirPicker';
 import { DevToolsView } from './DevToolsView';
 import { NativeAppView } from './NativeAppView';
+import { PromptChain } from './PromptChain';
 import { Terminal } from './Terminal';
 import type { WindowNode } from '../types';
 
@@ -613,6 +614,9 @@ export const AppWindow = memo(function AppWindow({ deskId, node, groupColor }: P
       {DIRS.map((dir) => (
         <div key={dir} className={`rs rs-${dir}`} onPointerDown={onResizePointerDown(dir)} />
       ))}
+      {isTerminal && node.isClaude && !node.pendingCwd && (
+        <PromptChain deskId={deskId} node={node} />
+      )}
     </div>
   );
 });
